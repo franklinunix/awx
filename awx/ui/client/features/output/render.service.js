@@ -3,7 +3,6 @@ import Entities from 'html-entities';
 
 import {
     EVENT_START_PLAY,
-    EVENT_START_PLAYBOOK,
     EVENT_STATS_PLAY,
     EVENT_START_TASK,
     OUTPUT_ANSI_COLORMAP,
@@ -34,9 +33,13 @@ const pattern = [
 const re = new RegExp(pattern);
 const hasAnsi = input => re.test(input);
 
-function JobRenderService ($q, $sce, $window) {
-    this.init = ({ compile, toggles }) => {
-        this.hooks = { compile };
+let $scope;
+
+function JobRenderService ($q, $compile, $sce, $window) {
+    this.init = (_$scope_, { toggles }) => {
+        $scope = _$scope_;
+        this.setScope();
+
         this.el = $(OUTPUT_ELEMENT_TBODY);
         this.parent = null;
 
@@ -201,7 +204,7 @@ function JobRenderService ($q, $sce, $window) {
             return { html: '', count: 0 };
         }
 
-        if (event.uuid && this.records[event.uuid]) {
+        if (event.uuid && this.records[event.uuid] && !this.records[event.uuid]._isIncomplete) {
             return { html: '', count: 0 };
         }
 
@@ -209,7 +212,19 @@ function JobRenderService ($q, $sce, $window) {
         const lines = stdout.split('\r\n');
         const record = this.createRecord(event, lines);
 
-        if (event.event === EVENT_START_PLAYBOOK) {
+        if (lines.length === 1 && lines[0] === '') {
+            // runner_on_start, runner_on_ok, and a few other events have an actual line count
+            // of 1 (stdout = '') and a claimed line count of 0 (end_line - start_line = 0).
+            // Since a zero-length string has an actual line count of 1, they'll still get
+            // rendered as blank lines unless we intercept them and add some special
+            // handling to remove them.
+            //
+            // Although we're not going to render the blank line, the actual line count of
+            // the zero-length stdout string, which is 1, has already been recorded at this
+            // point so we must also go back and set the event's recorded line length to 0
+            // in order to avoid deleting too many lines when we need to pop or shift a
+            // page that contains this event off of the view.
+            this.records[record.uuid].lineCount = 0;
             return { html: '', count: 0 };
         }
 
@@ -260,17 +275,20 @@ function JobRenderService ($q, $sce, $window) {
             return this.records[event.counter];
         }
 
-        let isHost = false;
-        if (typeof event.host === 'number') {
-            isHost = true;
+        let isClickable = false;
+        if (typeof event.host === 'number' || event.event_data && event.event_data.res) {
+            isClickable = true;
         } else if (event.type === 'project_update_event' &&
             event.event !== 'runner_on_skipped' &&
             event.event_data.host) {
-            isHost = true;
+            isClickable = true;
         }
 
+        const children = (this.records[event.uuid] && this.records[event.uuid].children)
+            ? this.records[event.uuid].children : [];
+
         const record = {
-            isHost,
+            isClickable,
             id: event.id,
             line: event.start_line + 1,
             name: event.event,
@@ -282,6 +300,7 @@ function JobRenderService ($q, $sce, $window) {
             lineCount: lines.length,
             isCollapsed: this.state.collapseAll,
             counters: [event.counter],
+            children
         };
 
         if (event.parent_uuid) {
@@ -304,12 +323,18 @@ function JobRenderService ($q, $sce, $window) {
 
             if (event.parent_uuid) {
                 if (this.records[event.parent_uuid]) {
-                    if (this.records[event.parent_uuid].children &&
-                        !this.records[event.parent_uuid].children.includes(event.uuid)) {
-                        this.records[event.parent_uuid].children.push(event.uuid);
+                    if (this.records[event.parent_uuid].children) {
+                        if (!this.records[event.parent_uuid].children.includes(event.uuid)) {
+                            this.records[event.parent_uuid].children.push(event.uuid);
+                        }
                     } else {
                         this.records[event.parent_uuid].children = [event.uuid];
                     }
+                } else {
+                    this.records[event.parent_uuid] = {
+                        _isIncomplete: true,
+                        children: [event.uuid]
+                    };
                 }
             }
         }
@@ -344,6 +369,7 @@ function JobRenderService ($q, $sce, $window) {
         let tdToggle = '';
         let tdEvent = '';
         let classList = '';
+        let directives = '';
 
         if (record.isMissing) {
             return `<div id="${record.uuid}" class="at-Stdout-row">
@@ -370,10 +396,6 @@ function JobRenderService ($q, $sce, $window) {
                 tdToggle = `<div class="at-Stdout-toggle" ng-click="vm.toggleCollapse('${id}')"><i class="fa ${icon} can-toggle"></i></div>`;
             }
 
-            if (record.isHost) {
-                tdEvent = `<div class="at-Stdout-event--host" ng-click="vm.showHostDetails('${record.id}', '${record.uuid}')"><span ng-non-bindable>${content}</span></div>`;
-            }
-
             if (record.time && record.line === ln) {
                 timestamp = `<span>${record.time}</span>`;
             }
@@ -397,17 +419,23 @@ function JobRenderService ($q, $sce, $window) {
 
         if (record && record.isCollapsed) {
             if (record.level === 3 || record.level === 0) {
-                classList += ' hidden';
+                classList += ' at-Stdout-row--hidden';
             }
         }
 
+        if (record && record.isClickable) {
+            classList += ' at-Stdout-row--clickable';
+            directives = `ng-click="vm.showHostDetails('${record.id}', '${record.uuid}')"`;
+        }
+
         return `
-            <div id="${id}" class="at-Stdout-row ${classList}">
+            <div id="${id}" class="at-Stdout-row ${classList}" ${directives}>
                 ${tdToggle}
                 <div class="at-Stdout-line">${ln}</div>
-                ${tdEvent}
+                <div class="at-Stdout-event"><span ng-non-bindable>${content}</span></div>
                 <div class="at-Stdout-time">${timestamp}</div>
-            </div>`;
+            </div>
+        `;
     };
 
     this.getTimestamp = created => {
@@ -435,8 +463,16 @@ function JobRenderService ($q, $sce, $window) {
         });
     });
 
-    this.compile = content => {
-        this.hooks.compile(content);
+    this.setScope = () => {
+        if (this.scope) this.scope.$destroy();
+        delete this.scope;
+
+        this.scope = $scope.$new();
+    };
+
+    this.compile = () => {
+        this.setScope();
+        $compile(this.el)(this.scope);
 
         return this.requestAnimationFrame();
     };
@@ -449,7 +485,7 @@ function JobRenderService ($q, $sce, $window) {
     this.shift = lines => {
         // We multiply by two here under the assumption that one element and one text node
         // is generated for each line of output.
-        const count = 2 * lines;
+        const count = (2 * lines) + 1;
         const elements = this.el.contents().slice(0, count);
 
         return this.remove(elements);
@@ -458,7 +494,7 @@ function JobRenderService ($q, $sce, $window) {
     this.pop = lines => {
         // We multiply by two here under the assumption that one element and one text node
         // is generated for each line of output.
-        const count = 2 * lines;
+        const count = (2 * lines) + 1;
         const elements = this.el.contents().slice(-count);
 
         return this.remove(elements);
@@ -472,10 +508,7 @@ function JobRenderService ($q, $sce, $window) {
         const result = this.prependEventGroup(events);
         const html = this.trustHtml(result.html);
 
-        const newElements = angular.element(html);
-
-        return this.requestAnimationFrame(() => this.el.prepend(newElements))
-            .then(() => this.compile(newElements))
+        return this.requestAnimationFrame(() => this.el.prepend(html))
             .then(() => result.lines);
     };
 
@@ -487,10 +520,7 @@ function JobRenderService ($q, $sce, $window) {
         const result = this.appendEventGroup(events);
         const html = this.trustHtml(result.html);
 
-        const newElements = angular.element(html);
-
-        return this.requestAnimationFrame(() => this.el.append(newElements))
-            .then(() => this.compile(newElements))
+        return this.requestAnimationFrame(() => this.el.append(html))
             .then(() => result.lines);
     };
 
@@ -540,7 +570,7 @@ function JobRenderService ($q, $sce, $window) {
         }
 
         const max = this.state.tail;
-        const min = max - count;
+        const min = max - count + 1;
 
         let lines = 0;
 
@@ -571,7 +601,7 @@ function JobRenderService ($q, $sce, $window) {
         }
 
         const min = this.state.head;
-        const max = min + count;
+        const max = min + count - 1;
 
         let lines = 0;
 
@@ -601,6 +631,6 @@ function JobRenderService ($q, $sce, $window) {
     this.getCapacity = () => OUTPUT_EVENT_LIMIT - (this.getTailCounter() - this.getHeadCounter());
 }
 
-JobRenderService.$inject = ['$q', '$sce', '$window'];
+JobRenderService.$inject = ['$q', '$compile', '$sce', '$window'];
 
 export default JobRenderService;

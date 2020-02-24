@@ -57,7 +57,7 @@ def test_empty_in(empty_value):
 @pytest.mark.parametrize(u"valid_value", [u'foo', u'foo,'])
 def test_valid_in(valid_value):
     field_lookup = FieldLookupBackend()
-    value, new_lookup = field_lookup.value_to_python(JobTemplate, 'project__name__in', valid_value)
+    value, new_lookup, _ = field_lookup.value_to_python(JobTemplate, 'project__name__in', valid_value)
     assert 'foo' in value
 
 
@@ -66,7 +66,7 @@ def test_invalid_field():
     field_lookup = FieldLookupBackend()
     with pytest.raises(ValueError) as excinfo:
         field_lookup.value_to_python(WorkflowJobTemplate, invalid_field, 'foo')
-    assert 'is not an allowed field name. Must be ascii encodable.' in excinfo.value.message
+    assert 'is not an allowed field name. Must be ascii encodable.' in str(excinfo.value)
 
 
 @pytest.mark.parametrize('lookup_suffix', ['', 'contains', 'startswith', 'in'])

@@ -4,12 +4,13 @@
 # Python
 import logging
 import json
+import os
 import requests
 import time
-import urlparse
+import threading
 import socket
 import select
-import six
+from urllib import parse as urlparse
 from concurrent.futures import ThreadPoolExecutor
 from requests.exceptions import RequestException
 
@@ -18,6 +19,7 @@ from django.conf import settings
 
 # requests futures, a dependency used by these handlers
 from requests_futures.sessions import FuturesSession
+import cachetools
 
 # AWX
 from awx.main.utils.formatters import LogstashFormatter
@@ -211,7 +213,7 @@ def _encode_payload_for_socket(payload):
     encoded_payload = payload
     if isinstance(encoded_payload, dict):
         encoded_payload = json.dumps(encoded_payload, ensure_ascii=False)
-    if isinstance(encoded_payload, six.text_type):
+    if isinstance(encoded_payload, str):
         encoded_payload = encoded_payload.encode('utf-8')
     return encoded_payload
 
@@ -237,7 +239,7 @@ class TCPHandler(BaseHandler):
         except Exception as e:
             ret = SocketResult(False, "Error sending message from %s: %s" %
                                (TCPHandler.__name__,
-                                ' '.join(six.text_type(arg) for arg in e.args)))
+                                ' '.join(str(arg) for arg in e.args)))
             logger.exception(ret.reason)
         finally:
             sok.close()
@@ -273,6 +275,16 @@ HANDLER_MAPPING = {
 }
 
 
+TTLCache = cachetools.TTLCache
+
+if 'py.test' in os.environ.get('_', ''):
+    # don't cache settings in unit tests
+    class TTLCache(TTLCache):
+
+        def __getitem__(self, item):
+            raise KeyError()
+
+
 class AWXProxyHandler(logging.Handler):
     '''
     Handler specific to the AWX external logging feature
@@ -287,15 +299,36 @@ class AWXProxyHandler(logging.Handler):
     Parameters match same parameters in the actualized handler classes.
     '''
 
+    thread_local = threading.local()
+    _auditor = None
+
     def __init__(self, **kwargs):
         # TODO: process 'level' kwarg
         super(AWXProxyHandler, self).__init__(**kwargs)
         self._handler = None
         self._old_kwargs = {}
 
+    @property
+    def auditor(self):
+        if not self._auditor:
+            self._auditor = logging.handlers.RotatingFileHandler(
+                filename='/var/log/tower/external.log',
+                maxBytes=1024 * 1024 * 50, # 50 MB
+                backupCount=5,
+            )
+
+            class WritableLogstashFormatter(LogstashFormatter):
+                @classmethod
+                def serialize(cls, message):
+                    return json.dumps(message)
+
+            self._auditor.setFormatter(WritableLogstashFormatter())
+        return self._auditor
+
     def get_handler_class(self, protocol):
         return HANDLER_MAPPING.get(protocol, AWXNullHandler)
 
+    @cachetools.cached(cache=TTLCache(maxsize=1, ttl=3), key=lambda *args, **kw: 'get_handler')
     def get_handler(self, custom_settings=None, force_create=False):
         new_kwargs = {}
         use_settings = custom_settings or settings
@@ -322,9 +355,17 @@ class AWXProxyHandler(logging.Handler):
             self._handler.setFormatter(self.formatter)
         return self._handler
 
+    @cachetools.cached(cache=TTLCache(maxsize=1, ttl=3), key=lambda *args, **kw: 'should_audit')
+    def should_audit(self):
+        return settings.LOG_AGGREGATOR_AUDIT
+
     def emit(self, record):
-        actual_handler = self.get_handler()
-        return actual_handler.emit(record)
+        if AWXProxyHandler.thread_local.enabled:
+            actual_handler = self.get_handler()
+            if self.should_audit():
+                self.auditor.setLevel(settings.LOG_AGGREGATOR_LEVEL)
+                self.auditor.emit(record)
+            return actual_handler.emit(record)
 
     def perform_test(self, custom_settings):
         """
@@ -334,7 +375,7 @@ class AWXProxyHandler(logging.Handler):
         handler = self.get_handler(custom_settings=custom_settings, force_create=True)
         handler.setFormatter(LogstashFormatter())
         logger = logging.getLogger(__file__)
-        fn, lno, func = logger.findCaller()
+        fn, lno, func, _ = logger.findCaller()
         record = logger.makeRecord('awx', 10, fn, lno,
                                    'AWX Connection Test', tuple(),
                                    None, func)
@@ -353,6 +394,13 @@ class AWXProxyHandler(logging.Handler):
                         )
             except RequestException as e:
                 raise LoggingConnectivityException(str(e))
+
+    @classmethod
+    def disable(cls):
+        cls.thread_local.enabled = False
+
+
+AWXProxyHandler.thread_local.enabled = True
 
 
 ColorHandler = logging.StreamHandler

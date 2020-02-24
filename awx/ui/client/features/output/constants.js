@@ -16,7 +16,7 @@ export const JOB_STATUS_FINISHED = JOB_STATUS_COMPLETE.concat(JOB_STATUS_INCOMPL
 export const OUTPUT_ANSI_COLORMAP = {
     0: '#000',
     1: '#A00',
-    2: '#0A0',
+    2: '#080',
     3: '#F0AD4E',
     4: '#00A',
     5: '#A0A',
@@ -37,13 +37,13 @@ export const OUTPUT_ELEMENT_LAST = '#atStdoutMenuLast';
 export const OUTPUT_MAX_BUFFER_LENGTH = 1000;
 export const OUTPUT_MAX_LAG = 120;
 export const OUTPUT_NO_COUNT_JOB_TYPES = ['ad_hoc_command', 'system_job', 'inventory_update'];
-export const OUTPUT_ORDER_BY = 'counter';
+export const OUTPUT_ORDER_BY = 'start_line';
 export const OUTPUT_PAGE_CACHE = true;
 export const OUTPUT_PAGE_LIMIT = 5;
 export const OUTPUT_PAGE_SIZE = 50;
 export const OUTPUT_SCROLL_DELAY = 100;
 export const OUTPUT_SCROLL_THRESHOLD = 0.1;
-export const OUTPUT_SEARCH_DOCLINK = 'https://docs.ansible.com/ansible-tower/3.3.0/html/userguide/search_sort.html';
+export const OUTPUT_SEARCH_DOCLINK = 'https://docs.ansible.com/ansible-tower/latest/html/userguide/search_sort.html';
 export const OUTPUT_SEARCH_FIELDS = ['changed', 'created', 'failed', 'host_name', 'stdout', 'task', 'role', 'playbook', 'play', 'start_line', 'end_line'];
 export const OUTPUT_SEARCH_KEY_EXAMPLES = ['host_name:localhost', 'task:set', 'created:>=2000-01-01', 'start_line:>=9000'];
 export const OUTPUT_EVENT_LIMIT = OUTPUT_PAGE_LIMIT * OUTPUT_PAGE_SIZE;

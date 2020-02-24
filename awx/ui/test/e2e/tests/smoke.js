@@ -9,7 +9,7 @@ const initializeData = () => {
     data.MACHINE_CREDENTIAL_NAME = `credential-machine-${id}`;
     data.ORGANIZATION_NAME = `organization-${id}`;
     data.PROJECT_NAME = `project-${id}`;
-    data.PROJECT_URL = 'https://github.com/jlaska/ansible-playbooks';
+    data.PROJECT_URL = 'https://github.com/ansible/test-playbooks';
     data.PROJECT_BRANCH = 'master';
     data.PLAYBOOK_NAME = 'multivault.yml';
     data.TEMPLATE_NAME = `template-${id}`;
@@ -22,7 +22,6 @@ module.exports = {
         initializeData();
 
         client.login();
-        client.resizeWindow(1200, 800);
         client.waitForAngular();
     },
     'create organization': client => {
@@ -98,6 +97,12 @@ module.exports = {
         projects.waitForElementVisible('div.spinny', 120000);
         projects.waitForElementNotVisible('div.spinny');
         projects.expect.element('i[class$="success"]').visible;
+
+        projects.expect.element('#project_cancel_btn').visible;
+        projects.click('#project_cancel_btn');
+        client.refresh();
+        client.waitForElementVisible('div.spinny');
+        client.waitForElementNotVisible('div.spinny');
     },
     'create inventory': client => {
         const inventories = client.page.inventories();
@@ -140,7 +145,7 @@ module.exports = {
         client.waitForElementVisible('div.spinny');
         client.waitForElementNotVisible('div.spinny');
 
-        client.expect.element('#hosts_tab').css('background-color').contain('132, 137, 146');
+        client.expect.element('#hosts_tab').css('background-color').contain('100, 105, 114');
 
         client.useCss();
         client.waitForElementVisible(addHost);
@@ -153,8 +158,8 @@ module.exports = {
         client.click('div[class="CodeMirror-scroll"]');
         client.sendKeys('.CodeMirror textarea', client.Keys.ENTER);
         client.sendKeys('.CodeMirror textarea', 'ansible_connection: local');
-        client.click('#host_host_variables_parse_type label[class$="hollow"]');
-        client.click('#host_host_variables_parse_type label[class$="hollow"]');
+        client.click('#host_variables_parse_type label[class$="hollow"]');
+        client.click('#host_variables_parse_type label[class$="hollow"]');
 
         client.expect.element('#host_save_btn').enabled;
         client.click('#host_save_btn');

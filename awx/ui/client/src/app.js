@@ -3,6 +3,8 @@ global.$AnsibleConfig = null;
 // Provided via Webpack DefinePlugin in webpack.config.js
 global.$ENV = {};
 
+global.$ConfigResponse = {};
+
 var urlPrefix;
 
 if ($basePath) {
@@ -10,7 +12,6 @@ if ($basePath) {
 }
 
 import start from './app.start';
-import systemTracking from './system-tracking/main';
 import inventoriesHosts from './inventories-hosts/main';
 import inventoryScripts from './inventory-scripts/main';
 import credentials from './credentials/main';
@@ -36,6 +37,7 @@ import RestServices from './rest/main';
 import access from './access/main';
 import scheduler from './scheduler/main';
 import instanceGroups from './instance-groups/main';
+import shared from './shared/main';
 
 import atFeatures from '~features';
 import atLibComponents from '~components';
@@ -53,7 +55,6 @@ angular
         'angular-duration-format',
         'angularMoment',
         'AngularScheduler',
-        'angular-md5',
         'dndLists',
         'ncy-angular-breadcrumb',
         'ngSanitize',
@@ -62,13 +63,13 @@ angular
         'gettext',
         'Timezones',
         'lrInfiniteScroll',
+        shared.name,
         about.name,
         access.name,
         license.name,
         RestServices.name,
         browserData.name,
         configuration.name,
-        systemTracking.name,
         inventoriesHosts.name,
         inventoryScripts.name,
         credentials.name,
@@ -92,7 +93,6 @@ angular
         'templates',
         'PromptDialog',
         'AWDirectives',
-        'features',
 
         instanceGroups,
         atFeatures,
@@ -163,16 +163,16 @@ angular
             // })
         }
     ])
-    .run(['$stateExtender', '$q', '$compile', '$cookies', '$rootScope', '$log', '$stateParams',
+    .run(['$q', '$cookies', '$rootScope', '$log', '$stateParams',
         'CheckLicense', '$location', 'Authorization', 'LoadBasePaths', 'Timer',
-        'LoadConfig', 'Store', 'pendoService', 'Prompt', 'Rest',
-        'Wait', 'ProcessErrors', '$state', 'GetBasePath', 'ConfigService',
-        'FeaturesService', '$filter', 'SocketService', 'AppStrings', '$transitions',
-        function($stateExtender, $q, $compile, $cookies, $rootScope, $log, $stateParams,
+        'LoadConfig', 'Store', 'pendoService', 'Rest',
+        '$state', 'GetBasePath', 'ConfigService', 'ProcessErrors',
+        'SocketService', 'AppStrings', '$transitions', 'i18n',
+        function($q, $cookies, $rootScope, $log, $stateParams,
             CheckLicense, $location, Authorization, LoadBasePaths, Timer,
-            LoadConfig, Store, pendoService, Prompt, Rest, Wait,
-            ProcessErrors, $state, GetBasePath, ConfigService, FeaturesService,
-            $filter, SocketService, AppStrings, $transitions) {
+            LoadConfig, Store, pendoService, Rest,
+            $state, GetBasePath, ConfigService, ProcessErrors,
+            SocketService, AppStrings, $transitions, i18n) {
 
             $rootScope.$state = $state;
             $rootScope.$state.matches = function(stateName) {
@@ -200,6 +200,10 @@ angular
                 document.title = `Ansible ${$rootScope.BRAND_NAME} ${title}`;
             });
 
+            $rootScope.$on('ws-approval', () => {
+                fetchApprovalsCount();
+            });
+
             function activateTab() {
                 // Make the correct tab active
                 var base = $location.path().replace(/^\//, '').split('/')[0];
@@ -210,6 +214,20 @@ angular
                     //base.replace(/\_/g, ' ');
                     base = (base === 'job_events' || base === 'job_host_summaries') ? 'jobs' : base;
                 }
+            }
+
+            function fetchApprovalsCount() {
+                Rest.setUrl(`${GetBasePath('workflow_approvals')}?status=pending&page_size=1`);
+                Rest.get()
+                    .then(({data}) => {
+                        $rootScope.pendingApprovalCount = data.count;
+                    })
+                    .catch(({data, status}) => {
+                        ProcessErrors({}, data, status, null, {
+                            hdr: i18n._('Error!'),
+                            msg: i18n._('Failed to get workflow jobs pending approval. GET returned status: ') + status
+                        });
+                    });
             }
 
             if ($rootScope.removeConfigReady) {
@@ -310,11 +328,11 @@ angular
                         }
 
                         if(!_.isEqual(toParamsWithoutSearchKeys, fromParamsWithoutSearchKeys)) {
-                            document.querySelector('.at-Layout-main').scrollTop = 0;
+                            document.body.scrollTop = document.documentElement.scrollTop = 0;
                         }
                     }
                     else {
-                        document.querySelector('.at-Layout-main').scrollTop = 0;
+                        document.body.scrollTop = document.documentElement.scrollTop = 0;
                     }
 
                     if (trans.from().name === 'license' && trans.params('to').hasOwnProperty('licenseMissing')) {
@@ -367,7 +385,11 @@ angular
                         var stime = timestammp[lastUser.id].time,
                             now = new Date().getTime();
                         if ((stime - now) <= 0) {
-                            $location.path('/login');
+                            if (global.$AnsibleConfig.login_redirect_override) {
+                                window.location.replace(global.$AnsibleConfig.login_redirect_override);
+                            } else {
+                                $location.path('/login');
+                            }
                         }
                     }
                     // If browser refresh, set the user_is_superuser value
@@ -382,7 +404,6 @@ angular
                                 SocketService.init();
                                 pendoService.issuePendoIdentity();
                                 CheckLicense.test();
-                                FeaturesService.get();
                                 if ($location.$$path === "/home" && $state.current && $state.current.name === "") {
                                     $state.go('dashboard');
                                 } else if ($location.$$path === "/portal" && $state.current && $state.current.name === "") {
@@ -390,6 +411,7 @@ angular
                                 }
                             });
                         });
+                        fetchApprovalsCount();
                     }
                 }
 
@@ -414,9 +436,9 @@ angular
                 // create a promise that will resolve state $AnsibleConfig is loaded
                 $rootScope.loginConfig = $q.defer();
             }
-            if (!$rootScope.featuresConfigured) {
-                // create a promise that will resolve when features are loaded
-                $rootScope.featuresConfigured = $q.defer();
+            if (!$rootScope.basePathsLoaded) {
+                // create a promise that will resolve when base paths are loaded
+                $rootScope.basePathsLoaded = $q.defer();
             }
             $rootScope.licenseMissing = true;
             //the authorization controller redirects to the home page automatcially if there is no last path defined. in order to override

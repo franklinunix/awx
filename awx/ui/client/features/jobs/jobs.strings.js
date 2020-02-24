@@ -14,9 +14,19 @@ function JobsStrings (BaseString) {
         ROW_ITEM_LABEL_INVENTORY: t.s('Inventory'),
         ROW_ITEM_LABEL_PROJECT: t.s('Project'),
         ROW_ITEM_LABEL_CREDENTIALS: t.s('Credentials'),
+        ROW_ITEM_LABEL_WEBHOOK: t.s('Webhook'),
         NO_RUNNING: t.s('There are no running jobs.'),
         JOB: t.s('Job'),
-        STATUS_TOOLTIP: status => t.s('Job {{status}}. Click for details.', { status })
+        STATUS_TOOLTIP: status => t.s('Job {{status}}. Click for details.', { status }),
+        SLICE_JOB: t.s('Slice Job'),
+        NEW: t.s('new'),
+        PENDING: t.s('pending'),
+        WAITING: t.s('waiting'),
+        RUNNING: t.s('running'),
+        SUCCESSFUL: t.s('successful'),
+        FAILED: t.s('failed'),
+        ERROR: t.s('error'),
+        CANCELED: t.s('canceled')
     };
 }
 

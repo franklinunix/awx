@@ -11,7 +11,7 @@
  */
 
 function InventoriesList($scope,
-    $filter, Rest, InventoryList, Prompt,
+    $filter, qs, InventoryList, Prompt,
     ProcessErrors, GetBasePath, Wait, $state,
     Dataset, canAdd, i18n, Inventory, InventoryHostsStrings,
     ngToast) {
@@ -38,7 +38,6 @@ function InventoriesList($scope,
 
     function processInventoryRow(inventory) {
         inventory.launch_class = "";
-        inventory.host_status_class = "Inventories-hostStatus";
 
         if (inventory.has_inventory_sources) {
             inventory.copyTip = i18n._('Inventories with sources cannot be copied');
@@ -158,7 +157,7 @@ function InventoriesList($scope,
                     resourceName: $filter('sanitize')(name),
                     body: deleteModalBody,
                     action: action,
-                    actionText: 'DELETE'
+                    actionText: i18n._('DELETE')
                 });
             });
     };
@@ -169,24 +168,31 @@ function InventoriesList($scope,
             inventory.pending_deletion = true;
         }
         if (data.status === 'deleted') {
-            let reloadListStateParams = null;
+            let reloadListStateParams = _.cloneDeep($state.params);
 
-            if($scope.inventories.length === 1 && $state.params.inventory_search && _.has($state, 'params.inventory_search.page') && $state.params.inventory_search.page !== '1') {
-                reloadListStateParams = _.cloneDeep($state.params);
+            if($scope.inventories.length === 1 && $state.params.inventory_search && _.hasIn($state, 'params.inventory_search.page') && $state.params.inventory_search.page !== '1') {
                 reloadListStateParams.inventory_search.page = (parseInt(reloadListStateParams.inventory_search.page)-1).toString();
             }
 
             if (parseInt($state.params.inventory_id) === data.inventory_id || parseInt($state.params.smartinventory_id) === data.inventory_id) {
                 $state.go("inventories", reloadListStateParams, {reload: true});
             } else {
-                $state.go('.', reloadListStateParams, {reload: true});
+                Wait('start');
+                $state.go('.', reloadListStateParams);
+                const path = GetBasePath($scope.list.basePath) || GetBasePath($scope.list.name);
+                qs.search(path, reloadListStateParams.inventory_search)
+                    .then((searchResponse) => {
+                        $scope.inventories_dataset = searchResponse.data;
+                        $scope.inventories = searchResponse.data.results;
+                    })
+                    .finally(() => Wait('stop'));
             }
         }
     });
 }
 
 export default ['$scope',
-    '$filter', 'Rest', 'InventoryList', 'Prompt',
+    '$filter', 'QuerySet', 'InventoryList', 'Prompt',
     'ProcessErrors', 'GetBasePath', 'Wait',
     '$state', 'Dataset', 'canAdd', 'i18n', 'InventoryModel',
     'InventoryHostsStrings', 'ngToast', InventoriesList

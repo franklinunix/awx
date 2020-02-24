@@ -1,8 +1,5 @@
-export default [ 'Rest', 'GetBasePath', 'ProcessErrors', 'CredentialTypeModel', 'TemplatesStrings',
-    function (Rest, GetBasePath, ProcessErrors, CredentialType, strings) {
-
-        // strings.get('deleteResource.HEADER')
-        // ${strings.get('deleteResource.CONFIRM', 'template')}
+export default [ 'ProcessErrors', 'CredentialTypeModel', 'TemplatesStrings', '$filter',
+    function (ProcessErrors, CredentialType, strings, $filter) {
 
         const vm = this || {};
 
@@ -10,16 +7,15 @@ export default [ 'Rest', 'GetBasePath', 'ProcessErrors', 'CredentialTypeModel', 
 
         let scope;
         let modal;
+        let activeTab;
 
         vm.init = (_scope_) => {
             scope = _scope_;
             ({ modal } = scope[scope.ns]);
 
             scope.$watch('vm.promptData.triggerModalOpen', () => {
-
                 vm.actionButtonClicked = false;
                 if(vm.promptData && vm.promptData.triggerModalOpen) {
-
                     scope.$emit('launchModalOpen', true);
                     vm.promptDataClone = _.cloneDeep(vm.promptData);
 
@@ -53,16 +49,14 @@ export default [ 'Rest', 'GetBasePath', 'ProcessErrors', 'CredentialTypeModel', 
 
                     let credentialType = new CredentialType();
 
-                    credentialType.http.get()
+                    credentialType.http.get({ params: { page_size: 200 }})
                     .then( (response) => {
                         vm.promptDataClone.prompts.credentials.credentialTypes = {};
                         vm.promptDataClone.prompts.credentials.credentialTypeOptions = [];
-                        let machineCredTypeId = null;
                         response.data.results.forEach((credentialTypeRow => {
                             vm.promptDataClone.prompts.credentials.credentialTypes[credentialTypeRow.id] = credentialTypeRow.kind;
                             if(credentialTypeRow.kind.match(/^(cloud|net|ssh|vault)$/)) {
                                 if(credentialTypeRow.kind === 'ssh') {
-                                    machineCredTypeId = credentialTypeRow.id;
                                     vm.promptDataClone.prompts.credentials.credentialKind = credentialTypeRow.id.toString();
                                 }
                                 vm.promptDataClone.prompts.credentials.credentialTypeOptions.push({
@@ -144,6 +138,7 @@ export default [ 'Rest', 'GetBasePath', 'ProcessErrors', 'CredentialTypeModel', 
                                 _active: true,
                                 order: order
                             };
+                            activeTab = activeTab || vm.steps.inventory.tab;
                             order++;
                         }
                         if (vm.promptDataClone.launchConf.ask_credential_on_launch ||
@@ -159,15 +154,17 @@ export default [ 'Rest', 'GetBasePath', 'ProcessErrors', 'CredentialTypeModel', 
                                 _disabled: (order === 1 || vm.readOnlyPrompts) ? false : true,
                                 order: order
                             };
+                            activeTab = activeTab || vm.steps.credential.tab;
                             order++;
                         }
-                        if(vm.promptDataClone.launchConf.ask_verbosity_on_launch || vm.promptDataClone.launchConf.ask_job_type_on_launch || vm.promptDataClone.launchConf.ask_limit_on_launch || vm.promptDataClone.launchConf.ask_tags_on_launch || vm.promptDataClone.launchConf.ask_skip_tags_on_launch || (vm.promptDataClone.launchConf.ask_variables_on_launch && !vm.promptDataClone.launchConf.ignore_ask_variables) || vm.promptDataClone.launchConf.ask_diff_mode_on_launch) {
+                        if(vm.promptDataClone.launchConf.ask_verbosity_on_launch || vm.promptDataClone.launchConf.ask_job_type_on_launch || vm.promptDataClone.launchConf.ask_limit_on_launch || vm.promptDataClone.launchConf.ask_tags_on_launch || vm.promptDataClone.launchConf.ask_skip_tags_on_launch || (vm.promptDataClone.launchConf.ask_variables_on_launch && !vm.promptDataClone.launchConf.ignore_ask_variables) || vm.promptDataClone.launchConf.ask_diff_mode_on_launch || vm.promptDataClone.launchConf.ask_scm_branch_on_launch) {
                             vm.steps.other_prompts.includeStep = true;
                             vm.steps.other_prompts.tab = {
                                 _active: order === 1 ? true : false,
                                 _disabled: (order === 1 || vm.readOnlyPrompts) ? false : true,
                                 order: order
                             };
+                            activeTab = activeTab || vm.steps.other_prompts.tab;
                             order++;
 
                             let codemirror = () =>  {
@@ -184,12 +181,43 @@ export default [ 'Rest', 'GetBasePath', 'ProcessErrors', 'CredentialTypeModel', 
                                 _disabled: (order === 1 || vm.readOnlyPrompts) ? false : true,
                                 order: order
                             };
+                            activeTab = activeTab || vm.steps.survey.tab;
                             order++;
                         }
                         vm.steps.preview.tab.order = order;
                         vm.steps.preview.tab._disabled = vm.readOnlyPrompts ? false : true;
-                        modal.show('PROMPT');
+                        modal.show($filter('sanitize')(vm.promptDataClone.templateName));
                         vm.promptData.triggerModalOpen = false;
+
+                        vm._savedPromptData = {
+                            1: _.cloneDeep(vm.promptDataClone)
+                        };
+                        Object.keys(vm.steps).forEach(step => {
+                            if (!vm.steps[step].tab) {
+                                return;
+                            }
+                            vm.steps[step].tab._onClickActivate = () => {
+                                if (vm._savedPromptData[vm.steps[step].tab.order]) {
+                                    vm.promptDataClone = vm._savedPromptData[vm.steps[step].tab.order];  
+                                }
+                                Object.keys(vm.steps).forEach(tabStep => {
+                                    if (!vm.steps[tabStep].tab) {
+                                        return;
+                                    }
+                                    if (vm.steps[tabStep].tab.order < vm.steps[step].tab.order) {
+                                        vm.steps[tabStep].tab._disabled = false;
+                                        vm.steps[tabStep].tab._active = false;
+                                    } else if (vm.steps[tabStep].tab.order === vm.steps[step].tab.order) {
+                                        vm.steps[tabStep].tab._disabled = false;
+                                        vm.steps[tabStep].tab._active = true;
+                                    } else {
+                                        vm.steps[tabStep].tab._disabled = true;
+                                        vm.steps[tabStep].tab._active = false;
+                                    }
+                                });
+                                scope.$broadcast('promptTabChange', { step });
+                            };
+                        });
 
                         modal.onClose = () => {
                             scope.$emit('launchModalOpen', false);
@@ -205,6 +233,38 @@ export default [ 'Rest', 'GetBasePath', 'ProcessErrors', 'CredentialTypeModel', 
             }, true);
         };
 
+        function getSelectedTags(tagId) {
+            const selectedTags = [];
+            const choiceElements = $(tagId).siblings(".select2").first()
+                .find(".select2-selection__choice");
+            choiceElements.each((index, option) => {
+                selectedTags.push({
+                    value: option.title,
+                    name: option.title,
+                    label: option.title
+                });
+            });
+            return selectedTags;
+        }
+
+        function consolidateTags (tags, otherTags) {
+            const seen = [];
+            const consolidated = [];
+            tags.forEach(tag => {
+                if (!seen.includes(tag.value)) {
+                    seen.push(tag.value);
+                    consolidated.push(tag);
+                }
+            });
+            otherTags.forEach(tag => {
+                if (!seen.includes(tag.value)) {
+                    seen.push(tag.value);
+                    consolidated.push(tag);
+                }
+            });
+            return consolidated;
+        }
+
         vm.next = (currentTab) => {
             if(_.has(vm, 'steps.other_prompts.tab._active') && vm.steps.other_prompts.tab._active === true){
                 try {
@@ -215,17 +275,68 @@ export default [ 'Rest', 'GetBasePath', 'ProcessErrors', 'CredentialTypeModel', 
                     event.preventDefault();
                     return;
                 }
+
+                // The current tag input state lives somewhere in the associated select2
+                // widgetry and isn't directly tied to the vm, so extract the tag values
+                // and update the vm to keep it in sync.
+                if (vm.promptDataClone.launchConf.ask_tags_on_launch) {
+                    vm.promptDataClone.prompts.tags.value = consolidateTags(
+                        angular.copy(vm.promptDataClone.prompts.tags.value),
+                        getSelectedTags("#job_launch_job_tags")
+                    );
+                }
+                if (vm.promptDataClone.launchConf.ask_skip_tags_on_launch) {
+                    vm.promptDataClone.prompts.skipTags.value = consolidateTags(
+                        angular.copy(vm.promptDataClone.prompts.skipTags.value),
+                        getSelectedTags("#job_launch_skip_tags")
+                    );
+                }
             }
+
+            let nextStep;
             Object.keys(vm.steps).forEach(step => {
-                if(vm.steps[step].tab) {
-                    if(vm.steps[step].tab.order === currentTab.order) {
-                        vm.steps[step].tab._active = false;
-                    } else if(vm.steps[step].tab.order === currentTab.order + 1) {
-                        vm.steps[step].tab._active = true;
-                        vm.steps[step].tab._disabled = false;
-                    }
+                if (!vm.steps[step].tab) {
+                    return;
+                }
+                if (vm.steps[step].tab.order === currentTab.order + 1) {
+                    nextStep = step;
                 }
             });
+
+            if (!nextStep) {
+                return;
+            }
+
+            // Save the current promptData state in case we need to revert
+            vm._savedPromptData[currentTab.order] = _.cloneDeep(vm.promptDataClone);
+            Object.keys(vm.steps).forEach(tabStep => {
+                if (!vm.steps[tabStep].tab) {
+                    return;
+                }
+                if (vm.steps[tabStep].tab.order < vm.steps[nextStep].tab.order) {
+                    vm.steps[tabStep].tab._disabled = false;
+                    vm.steps[tabStep].tab._active = false;
+                } else if (vm.steps[tabStep].tab.order === vm.steps[nextStep].tab.order) {
+                    vm.steps[tabStep].tab._disabled = false;
+                    vm.steps[tabStep].tab._active = true;
+                } else {
+                    vm.steps[tabStep].tab._disabled = true;
+                    vm.steps[tabStep].tab._active = false;
+                }
+            });
+            scope.$broadcast('promptTabChange', { step: nextStep });
+        };
+
+        vm.keypress = (event) => {
+          if (vm.steps.survey.tab && vm.steps.survey.tab._active && !vm.readOnlyPrompts && !vm.forms.survey.$valid) {
+            return;
+          }
+          if (document.activeElement.type === 'textarea') {
+            return;
+          }
+          if (event.key === 'Enter') {
+            vm.next(activeTab);
+          }
         };
 
         vm.finish = () => {

@@ -14,6 +14,7 @@ function OutputStrings (BaseString) {
     };
 
     ns.tooltips = {
+        ARTIFACTS: t.s('Read-only view of artifacts added to the job template'),
         CANCEL: t.s('Cancel'),
         COLLAPSE_OUTPUT: t.s('Collapse Output'),
         DELETE: t.s('Delete'),
@@ -21,8 +22,12 @@ function OutputStrings (BaseString) {
         CREDENTIAL: t.s('View the Credential'),
         EXPAND_OUTPUT: t.s('Expand Output'),
         EXTRA_VARS: t.s('Read-only view of extra variables added to the job template'),
+        HOST_LIMIT: t.s('When this field is true, the job\'s inventory belongs to an organization that has exceeded it\'s limit of hosts as defined by the system administrator.'),
         INVENTORY: t.s('View the Inventory'),
+        INVENTORY_SCM: t.s('View the Project'),
+        INVENTORY_SCM_JOB: t.s('View Project checkout results'),
         JOB_TEMPLATE: t.s('View the Job Template'),
+        SLICE_JOB_DETAILS: t.s('Job is one of several from a JT that slices on inventory'),
         PROJECT: t.s('View the Project'),
         PROJECT_UPDATE: t.s('View Project checkout results'),
         SCHEDULE: t.s('View the Schedule'),
@@ -33,6 +38,8 @@ function OutputStrings (BaseString) {
         MENU_UP: t.s('Get previous page'),
         MENU_LAST: t.s('Go to last page of available output'),
         MENU_FOLLOWING: t.s('Currently following output as it arrives. Click to unfollow'),
+        WEBHOOK_JOB_TEMPLATE: t.s('View the webhook configuration on the job template.'),
+        WEBHOOK_WORKFLOW_JOB_TEMPLATE: t.s('View the webhook configuration on the workflow job template.'),
     };
 
     ns.details = {
@@ -43,18 +50,26 @@ function OutputStrings (BaseString) {
         SHOW_LESS: t.s('Show Less'),
         SHOW_MORE: t.s('Show More'),
         UNKNOWN: t.s('Finished'),
+        WEBHOOK: t.s('Webhook'),
     };
 
     ns.labels = {
+        ARTIFACTS: t.s('Artifacts'),
         CREDENTIAL: t.s('Credential'),
+        ENVIRONMENT: t.s('Environment'),
+        EXECUTION_NODE: t.s('Execution Node'),
         EXTRA_VARS: t.s('Extra Variables'),
         FINISHED: t.s('Finished'),
         FORKS: t.s('Forks'),
+        HOST_LIMIT_ERROR: t.s('Host Limit Error'),
         INSTANCE_GROUP: t.s('Instance Group'),
+        CONTAINER_GROUP: t.s('Container Group'),
         INVENTORY: t.s('Inventory'),
+        INVENTORY_SCM: t.s('Source Project'),
         JOB_EXPLANATION: t.s('Explanation'),
         JOB_TAGS: t.s('Job Tags'),
         JOB_TEMPLATE: t.s('Job Template'),
+        SLICE_JOB: t.s('Slice Job'),
         JOB_TYPE: t.s('Job Type'),
         LABELS: t.s('Labels'),
         LAUNCHED_BY: t.s('Launched By'),
@@ -67,11 +82,14 @@ function OutputStrings (BaseString) {
         OVERWRITE_VARS: t.s('Overwrite Vars'),
         PLAYBOOK: t.s('Playbook'),
         PROJECT: t.s('Project'),
+        SCM_BRANCH: t.s('Branch'),
+        SCM_REFSPEC: t.s('Refspec'),
         RESULT_TRACEBACK: t.s('Error Details'),
         SCM_REVISION: t.s('Revision'),
         SKIP_TAGS: t.s('Skip Tags'),
         SOURCE: t.s('Source'),
         SOURCE_CREDENTIAL: t.s('Source Credential'),
+        SOURCE_WORKFLOW_JOB: t.s('Source Workflow'),
         STARTED: t.s('Started'),
         STATUS: t.s('Status'),
         VERBOSITY: t.s('Verbosity'),
@@ -111,6 +129,12 @@ function OutputStrings (BaseString) {
         NO_RESULT_FOUND: t.s('No result found'),
         STANDARD_OUT: t.s('Standard Out'),
         STANDARD_ERROR: t.s('Standard Error')
+    };
+
+    ns.workflow_status = {
+        SUCCESSFUL: t.s('SUCCESSFUL'),
+        FAILED: t.s('FAILED'),
+        NO_JOBS_FINISHED: t.s('NO JOBS FINISHED')
     };
 }
 

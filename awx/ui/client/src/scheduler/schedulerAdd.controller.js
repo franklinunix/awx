@@ -20,6 +20,26 @@ export default ['$filter', '$state', '$stateParams', '$http', 'Wait',
         scheduler,
         job_type;
 
+    /*
+     * Normally if "ask_*" checkboxes are checked in a job template settings,
+     * shouldShowPromptButton() returns True to show the "PROMPT" button.
+     * However, extra_vars("ask_variables_on_launch") does not use this and
+     * displays a separate text area within the add/edit page for input.
+     * We exclude "ask_variables_on_launch" from shouldShowPromptButton() here.
+     */
+    const shouldShowPromptButton = (launchConf) => launchConf.survey_enabled ||
+        launchConf.ask_inventory_on_launch ||
+        launchConf.ask_credential_on_launch ||
+        launchConf.ask_verbosity_on_launch ||
+        launchConf.ask_job_type_on_launch ||
+        launchConf.ask_limit_on_launch ||
+        launchConf.ask_tags_on_launch ||
+        launchConf.ask_skip_tags_on_launch ||
+        launchConf.ask_diff_mode_on_launch ||
+        launchConf.credential_needed_to_start ||
+        launchConf.ask_scm_branch_on_launch ||
+        launchConf.variables_needed_to_start.length !== 0;
+
     var schedule_url = ParentObject.related.schedules || `${ParentObject.related.inventory_source}schedules`;
     if (ParentObject){
         $scope.parentObject = ParentObject;
@@ -99,7 +119,7 @@ export default ['$filter', '$state', '$stateParams', '$http', 'Wait',
     $scope.schedulerEndMinute = "00";
     $scope.schedulerEndSecond = "00";
     $scope.parentObject = ParentObject;
-
+    
     $scope.hideForm = true;
 
     // extra_data field is not manifested in the UI when scheduling a Management Job
@@ -152,19 +172,7 @@ export default ['$filter', '$state', '$stateParams', '$http', 'Wait',
                     $scope.noVars = true;
                 }
 
-                if (!launchConf.survey_enabled &&
-                    !launchConf.ask_inventory_on_launch &&
-                    !launchConf.ask_credential_on_launch &&
-                    !launchConf.ask_verbosity_on_launch &&
-                    !launchConf.ask_job_type_on_launch &&
-                    !launchConf.ask_limit_on_launch &&
-                    !launchConf.ask_tags_on_launch &&
-                    !launchConf.ask_skip_tags_on_launch &&
-                    !launchConf.ask_diff_mode_on_launch &&
-                    !launchConf.survey_enabled &&
-                    !launchConf.credential_needed_to_start &&
-                    !launchConf.inventory_needed_to_start &&
-                    launchConf.variables_needed_to_start.length === 0) {
+                if (!shouldShowPromptButton(launchConf)) {
                         $scope.showPromptButton = false;
                 } else {
                     $scope.showPromptButton = true;
@@ -227,6 +235,7 @@ export default ['$filter', '$state', '$stateParams', '$http', 'Wait',
                 }
             });
     } else if ($state.current.name === 'templates.editWorkflowJobTemplate.schedules.add'){
+        $scope.parseType = 'yaml';
         let workflowJobTemplate = new WorkflowJobTemplate();
 
         $q.all([workflowJobTemplate.optionsLaunch(ParentObject.id), workflowJobTemplate.getLaunch(ParentObject.id)])
@@ -239,8 +248,22 @@ export default ['$filter', '$state', '$stateParams', '$http', 'Wait',
                     });
                 };
 
-                if(!launchConf.survey_enabled) {
-                        $scope.showPromptButton = false;
+                if (launchConf.ask_variables_on_launch) {
+                    $scope.noVars = false;
+                    $scope.extraVars = ParentObject.extra_vars === '' ? '---' : ParentObject.extra_vars;
+
+                    ParseTypeChange({
+                        scope: $scope,
+                        variable: 'extraVars',
+                        parse_variable: 'parseType',
+                        field_id: 'SchedulerForm-extraVars'
+                    });
+                } else {
+                    $scope.noVars = true;
+                }
+
+                if (!shouldShowPromptButton(launchConf)) {
+                    $scope.showPromptButton = false;
                 } else {
                     $scope.showPromptButton = true;
 
@@ -259,6 +282,7 @@ export default ['$filter', '$state', '$stateParams', '$http', 'Wait',
                                     launchConf: responses[1].data,
                                     launchOptions: responses[0].data,
                                     surveyQuestions: processed.surveyQuestions,
+                                    templateType: ParentObject.type,
                                     template: ParentObject.id,
                                     prompts: PromptService.processPromptValues({
                                         launchConf: responses[1].data,
@@ -283,6 +307,7 @@ export default ['$filter', '$state', '$stateParams', '$http', 'Wait',
                         $scope.promptData = {
                             launchConf: responses[1].data,
                             launchOptions: responses[0].data,
+                            templateType: ParentObject.type,
                             template: ParentObject.id,
                             prompts: PromptService.processPromptValues({
                                 launchConf: responses[1].data,
@@ -322,7 +347,10 @@ export default ['$filter', '$state', '$stateParams', '$http', 'Wait',
         }
     } else if (base === 'system_job_templates') {
         schedule_url = GetBasePath(base) + $stateParams.id + '/schedules/';
-        $scope.cleanupJob = true;
+        let parentJobType = _.get($scope.parentObject, 'job_type');
+        if (parentJobType !== 'cleanup_tokens' && parentJobType !== 'cleanup_sessions') {
+            $scope.askDaysToKeep = true;
+        }
     }
 
     Wait('start');
@@ -382,6 +410,8 @@ export default ['$filter', '$state', '$stateParams', '$http', 'Wait',
     scheduler.clear();
     $scope.$on("htmlDetailReady", function() {
         $scope.hideForm = false;
+        scheduler.scope.schedulerStartDt = moment(new Date()).add(1,'days');
+
         $scope.$watchGroup(["schedulerName",
             "schedulerStartDt",
             "schedulerStartHour",

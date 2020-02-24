@@ -4,11 +4,36 @@
  * All Rights Reserved
  *************************************************/
 
-export default ['$scope', '$filter', 'i18n',
-    function ($scope, $filter, i18n) {
+export default ['$scope', '$filter', 'i18n', 'JobsStrings',
+    function ($scope, $filter, i18n, JobsStrings) {
+
+        const strings = JobsStrings;
 
         function isFailureState(status) {
             return status === 'failed' || status === 'error' || status === 'canceled';
+        }
+
+        function getTranslatedStatusString(status) {
+            switch (status) {
+                case 'new':
+                    return strings.get('list.NEW');
+                case 'pending':
+                    return strings.get('list.PENDING');
+                case 'waiting':
+                    return strings.get('list.WAITING');
+                case 'running':
+                    return strings.get('list.RUNNING');
+                case 'successful':
+                    return strings.get('list.SUCCESSFUL');
+                case 'failed':
+                    return strings.get('list.FAILED');
+                case 'error':
+                    return strings.get('list.ERROR');
+                case 'canceled':
+                    return strings.get('list.CANCELED');
+                default:
+                    return status;
+            }
         }
 
         function init(){
@@ -21,26 +46,23 @@ export default ['$scope', '$filter', 'i18n',
                 return;
             }
 
-            // unless we explicitly define a value for the template-type attribute when invoking the
-            // directive, assume the status icons are for a regular (non-workflow) job when building
-            // the details url path
-            if (typeof $scope.templateType !== 'undefined' && $scope.templateType === 'workflow_job_template') {
-                detailsBaseUrl = '/#/workflows/';
-            } else {
-                detailsBaseUrl = '/#/jobs/playbook/';
-            }
-
             var sparkData =
             _.sortBy(recentJobs.map(function(job) {
-
                 const finished = $filter('longDate')(job.finished) || job.status+"";
+
+                // We now get the job type of recent jobs associated with a JT
+                if (job.type === 'workflow_job') {
+                    detailsBaseUrl = '/#/workflows/';
+                } else if (job.type === 'job') {
+                    detailsBaseUrl = '/#/jobs/playbook/';
+                }
 
                 const data = {
                     status: job.status,
                     jobId: job.id,
                     sortDate: job.finished || "running" + job.id,
                     finished: finished,
-                    status_tip: `${i18n._('JOB ID')}: ${job.id} <br>${i18n._('STATUS')}: ${job.status.toUpperCase()} <br>${i18n._('FINISHED')}: ${finished}`,
+                    status_tip: `${i18n._('JOB ID')}: ${job.id} <br>${i18n._('STATUS')}: ${getTranslatedStatusString(job.status).toUpperCase()} <br>${i18n._('FINISHED')}: ${finished}`,
                     detailsUrl: detailsBaseUrl + job.id
                 };
 

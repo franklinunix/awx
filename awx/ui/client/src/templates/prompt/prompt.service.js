@@ -10,7 +10,8 @@ function PromptService (Empty, $filter)  {
             limit: {},
             tags: {},
             skipTags: {},
-            diffMode: {}
+            diffMode: {},
+            scmBranch: {}
         };
 
         prompts.credentials.value = _.has(params, 'launchConf.defaults.credentials') ? _.cloneDeep(params.launchConf.defaults.credentials) : [];
@@ -25,14 +26,31 @@ function PromptService (Empty, $filter)  {
               hasDefaultExtraVars = _.get(params, 'launchConf.defaults.extra_vars');
 
         if(hasCurrentExtraVars && hasDefaultExtraVars) {
-            extraVars = _.merge(jsyaml.safeLoad(params.launchConf.defaults.extra_vars), params.currentValues.extra_data);
+            let currentExtraVars = {};
+            let defaultExtraVars = {};
+            if (typeof params.currentValues.extra_data === 'object') {
+                currentExtraVars = params.currentValues.extra_data;
+            } else if (typeof params.currentValues.extra_data === 'string') {
+                currentExtraVars = jsyaml.safeDump(params.currentValues.extra_data);
+            }
+
+            if (typeof params.launchConf.defaults.extra_vars === 'object') {
+                defaultExtraVars = params.launchConf.defaults.extra_vars;
+            } else if (typeof params.launchConf.defaults.extra_vars === 'string') {
+                defaultExtraVars = jsyaml.safeLoad(params.launchConf.defaults.extra_vars);
+            }
+            extraVars = '---\n' + jsyaml.safeDump(_.merge(defaultExtraVars, currentExtraVars));
         } else if(hasCurrentExtraVars) {
-            extraVars = params.currentValues.extra_data;
+            if (typeof params.currentValues.extra_data === 'object') {
+                extraVars = '---\n' + jsyaml.safeDump(params.currentValues.extra_data);
+            } else if (typeof params.currentValues.extra_data === 'string') {
+                extraVars = params.currentValues.extra_data;
+            }
         } else if(hasDefaultExtraVars) {
-            extraVars = jsyaml.safeLoad(params.launchConf.defaults.extra_vars);
+            extraVars = params.launchConf.defaults.extra_vars;
         }
 
-        prompts.variables.value = extraVars && extraVars !== '' ? '---\n' + jsyaml.safeDump(extraVars) : '---\n';
+        prompts.variables.value = extraVars && extraVars !== '' ? extraVars : '---\n';
         prompts.verbosity.choices = _.get(params, 'launchOptions.actions.POST.verbosity.choices', []).map(c => ({label: c[1], value: c[0]}));
         prompts.verbosity.value = _.has(params, 'currentValues.verbosity') && params.currentValues.verbosity ? _.find(prompts.verbosity.choices, item => item.value === params.currentValues.verbosity) : _.find(prompts.verbosity.choices, item => item.value === params.launchConf.defaults.verbosity);
         prompts.jobType.choices = _.get(params, 'launchOptions.actions.POST.job_type.choices', []).map(c => ({label: c[1], value: c[0]}));
@@ -41,7 +59,7 @@ function PromptService (Empty, $filter)  {
         prompts.tags.value = (jobTags && jobTags !== "") ? jobTags.split(',').map((i) => ({name: i, label: i, value: i})) : [];
         prompts.skipTags.value = (skipTags && skipTags !== "") ? skipTags.split(',').map((i) => ({name: i, label: i, value: i})) : [];
         prompts.diffMode.value = _.has(params, 'currentValues.diff_mode') && typeof params.currentValues.diff_mode === 'boolean' ? params.currentValues.diff_mode : (_.has(params, 'launchConf.defaults.diff_mode') ? params.launchConf.defaults.diff_mode : null);
-
+        prompts.scmBranch.value = _.has(params, 'currentValues.scm_branch') && params.currentValues.scm_branch ? params.currentValues.scm_branch : (_.has(params, 'launchConf.defaults.scm_branch') ? params.launchConf.defaults.scm_branch : "");
         return prompts;
     };
 
@@ -151,7 +169,7 @@ function PromptService (Empty, $filter)  {
         if (promptData.launchConf.ask_verbosity_on_launch && _.has(promptData, 'prompts.verbosity.value.value')) {
             launchData.verbosity = promptData.prompts.verbosity.value.value;
         }
-        if (promptData.launchConf.ask_inventory_on_launch && !Empty(promptData.prompts.inventory.value.id)){
+        if (promptData.launchConf.ask_inventory_on_launch && _.has(promptData, 'prompts.inventory.value.id')) {
             launchData.inventory_id = promptData.prompts.inventory.value.id;
         }
         if (promptData.launchConf.ask_credential_on_launch){
@@ -162,6 +180,9 @@ function PromptService (Empty, $filter)  {
         }
         if (promptData.launchConf.ask_diff_mode_on_launch && _.has(promptData, 'prompts.diffMode.value')) {
             launchData.diff_mode = promptData.prompts.diffMode.value;
+        }
+        if (promptData.launchConf.ask_scm_branch_on_launch && _.has(promptData, 'prompts.scmBranch.value')) {
+            launchData.scm_branch = promptData.prompts.scmBranch.value;
         }
         if (promptData.prompts.credentials.passwords) {
             _.forOwn(promptData.prompts.credentials.passwords, (val, key) => {
@@ -178,6 +199,17 @@ function PromptService (Empty, $filter)  {
                     });
                 }
             });
+        }
+
+        if (_.get(promptData, 'templateType') === 'workflow_job_template') {
+            if (_.get(launchData, 'inventory_id', null) === null) {
+                // It's possible to get here on a workflow job template with an inventory prompt and no
+                // default value by selecting an inventory, removing it, selecting a different inventory,
+                // and then reverting. A null inventory_id may be accepted by the API for prompted workflow
+                // inventories in the future, but for now they will 400. As such, we intercept that case here
+                // and remove it from the request data prior to launching.
+                delete launchData.inventory_id;
+            }
         }
 
         return launchData;
@@ -211,17 +243,16 @@ function PromptService (Empty, $filter)  {
     };
 
     this.bundlePromptDataForSaving = (params) => {
-
         const promptDataToSave = params.dataToSave ? params.dataToSave : {};
 
         if(params.promptData.launchConf.survey_enabled){
+            if(!promptDataToSave.extra_data) {
+                promptDataToSave.extra_data = {};
+            }
             for (var i=0; i < params.promptData.surveyQuestions.length; i++){
                 var fld = params.promptData.surveyQuestions[i].variable;
                 // grab all survey questions that have answers
                 if(params.promptData.surveyQuestions[i].required || (params.promptData.surveyQuestions[i].required === false && params.promptData.surveyQuestions[i].model.toString()!=="")) {
-                    if(!promptDataToSave.extra_data) {
-                        promptDataToSave.extra_data = {};
-                    }
                     promptDataToSave.extra_data[fld] = params.promptData.surveyQuestions[i].model;
                 }
 
@@ -242,30 +273,34 @@ function PromptService (Empty, $filter)  {
             }
         }
 
+        const launchConfDefaults = _.get(params, ['promptData', 'launchConf', 'defaults'], {});
+
         if(_.has(params, 'promptData.prompts.jobType.value.value') && _.get(params, 'promptData.launchConf.ask_job_type_on_launch')) {
-            promptDataToSave.job_type = params.promptData.launchConf.defaults.job_type && params.promptData.launchConf.defaults.job_type === params.promptData.prompts.jobType.value.value ? null : params.promptData.prompts.jobType.value.value;
+            promptDataToSave.job_type = launchConfDefaults.job_type && launchConfDefaults.job_type === params.promptData.prompts.jobType.value.value ? null : params.promptData.prompts.jobType.value.value;
         }
         if(_.has(params, 'promptData.prompts.tags.value') && _.get(params, 'promptData.launchConf.ask_tags_on_launch')){
-            const templateDefaultJobTags = params.promptData.launchConf.defaults.job_tags.split(',');
+            const templateDefaultJobTags = launchConfDefaults.job_tags.split(',');
             promptDataToSave.job_tags = (_.isEqual(templateDefaultJobTags.sort(), params.promptData.prompts.tags.value.map(a => a.value).sort())) ? null : params.promptData.prompts.tags.value.map(a => a.value).join();
         }
         if(_.has(params, 'promptData.prompts.skipTags.value') && _.get(params, 'promptData.launchConf.ask_skip_tags_on_launch')){
-            const templateDefaultSkipTags = params.promptData.launchConf.defaults.skip_tags.split(',');
+            const templateDefaultSkipTags = launchConfDefaults.skip_tags.split(',');
             promptDataToSave.skip_tags = (_.isEqual(templateDefaultSkipTags.sort(), params.promptData.prompts.skipTags.value.map(a => a.value).sort())) ? null : params.promptData.prompts.skipTags.value.map(a => a.value).join();
         }
         if(_.has(params, 'promptData.prompts.limit.value') && _.get(params, 'promptData.launchConf.ask_limit_on_launch')){
-            promptDataToSave.limit = params.promptData.launchConf.defaults.limit && params.promptData.launchConf.defaults.limit === params.promptData.prompts.limit.value ? null : params.promptData.prompts.limit.value;
+            promptDataToSave.limit = launchConfDefaults.limit && launchConfDefaults.limit === params.promptData.prompts.limit.value ? null : params.promptData.prompts.limit.value;
         }
         if(_.has(params, 'promptData.prompts.verbosity.value.value') && _.get(params, 'promptData.launchConf.ask_verbosity_on_launch')){
-            promptDataToSave.verbosity = params.promptData.launchConf.defaults.verbosity && params.promptData.launchConf.defaults.verbosity === params.promptData.prompts.verbosity.value.value ? null : params.promptData.prompts.verbosity.value.value;
+            promptDataToSave.verbosity = launchConfDefaults.verbosity && launchConfDefaults.verbosity === params.promptData.prompts.verbosity.value.value ? null : params.promptData.prompts.verbosity.value.value;
         }
         if(_.has(params, 'promptData.prompts.inventory.value') && _.get(params, 'promptData.launchConf.ask_inventory_on_launch')){
-            promptDataToSave.inventory = params.promptData.launchConf.defaults.inventory && params.promptData.launchConf.defaults.inventory.id === params.promptData.prompts.inventory.value.id ? null : params.promptData.prompts.inventory.value.id;
+            promptDataToSave.inventory = launchConfDefaults.inventory && launchConfDefaults.inventory.id === params.promptData.prompts.inventory.value.id ? null : params.promptData.prompts.inventory.value.id;
         }
         if(_.has(params, 'promptData.prompts.diffMode.value') && _.get(params, 'promptData.launchConf.ask_diff_mode_on_launch')){
-            promptDataToSave.diff_mode = params.promptData.launchConf.defaults.diff_mode && params.promptData.launchConf.defaults.diff_mode === params.promptData.prompts.diffMode.value ? null : params.promptData.prompts.diffMode.value;
+            promptDataToSave.diff_mode = launchConfDefaults.diff_mode && launchConfDefaults.diff_mode === params.promptData.prompts.diffMode.value ? null : params.promptData.prompts.diffMode.value;
         }
-
+        if(_.has(params, 'promptData.prompts.scmBranch.value') && _.get(params, 'promptData.launchConf.ask_scm_branch_on_launch')){
+            promptDataToSave.scm_branch = launchConfDefaults.scm_branch && launchConfDefaults.scm_branch === params.promptData.prompts.scmBranch.value ? null : params.promptData.prompts.scmBranch.value;
+        }
         return promptDataToSave;
     };
 }

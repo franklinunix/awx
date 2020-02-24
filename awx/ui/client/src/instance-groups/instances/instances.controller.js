@@ -1,41 +1,118 @@
-function InstancesController ($scope, $state, $http, models, strings, Dataset, ProcessErrors) {
+function InstancesController ($scope, $state, $http, $transitions, models, strings, Dataset, ProcessErrors) {
     const { instanceGroup } = models;
     const vm = this || {};
+    let paginateQuerySet = {};
     vm.strings = strings;
     vm.panelTitle = instanceGroup.get('name');
     vm.instance_group_id = instanceGroup.get('id');
     vm.policy_instance_list = instanceGroup.get('policy_instance_list');
     vm.isSuperuser = $scope.$root.user_is_superuser;
 
-
-    init();
-
-    function init() {
-        vm.list = {
-            name: 'instances',
-            iterator: 'instance',
-            basePath: `/api/v2/instance_groups/${vm.instance_group_id}/instances/`
+    let tabs = {};
+    let addInstancesRoute ="";
+    if ($state.is("instanceGroups.instances")) {
+        tabs={ state: {
+                    details: {
+                        _go: 'instanceGroups.edit'
+                    },
+                    instances: {
+                        _active: true,
+                        _go: 'instanceGroups.instances'
+                    },
+                    jobs: {
+                        _go: 'instanceGroups.jobs'
+                    }
+                }
+            };
+        addInstancesRoute = 'instanceGroups.instances.modal.add';
+    } else if ($state.is("instanceGroups.containerGroupInstances")) {
+        tabs={
+            state: {
+                details: {
+                    _go: 'instanceGroups.editContainerGroup'
+                },
+                instances: {
+                    _active: true,
+                    _go: 'instanceGroups.containerGroupInstances'
+                },
+                jobs: {
+                    _go: 'instanceGroups.containerGroupJobs'
+                }
+            }
         };
-
-        vm.dataset = Dataset.data;
-        vm.instances = instanceGroup.get('related.instances.results');
+        addInstancesRoute = 'instanceGroups.containerGroupInstances.modal.add';
     }
 
-    vm.tab = {
-        details: {
-            _go: 'instanceGroups.edit',
-            _params: { instance_group_id: vm.instance_group_id }
-        },
-        instances: {
-            _active: true,
-            _go: 'instanceGroups.instances',
-            _params: { instance_group_id: vm.instance_group_id }
-        },
-        jobs: {
-            _go: 'instanceGroups.jobs',
-            _params: { instance_group_id: vm.instance_group_id }
-        }
+    vm.list = {
+        name: 'instances',
+        iterator: 'instance',
+        basePath: `/api/v2/instance_groups/${vm.instance_group_id}/instances/`
     };
+    vm.instance_dataset = Dataset.data;
+    vm.instances = Dataset.data.results;
+
+    const toolbarSortDefault = {
+        label: `${strings.get('sort.NAME_ASCENDING')}`,
+        value: 'hostname'
+    };
+
+    vm.addInstances = () => {
+
+        return $state.go(`${addInstancesRoute}`);
+    };
+
+
+    vm.toolbarSortValue = toolbarSortDefault;
+    vm.toolbarSortOptions = [
+        toolbarSortDefault,
+        { label: `${strings.get('sort.NAME_DESCENDING')}`, value: '-hostname' },
+        { label: `${strings.get('sort.UUID_ASCENDING')}`, value: 'uuid' },
+        { label: `${strings.get('sort.UUID_DESCENDING')}`, value: '-uuid' },
+        { label: `${strings.get('sort.CREATED_ASCENDING')}`, value: 'created' },
+        { label: `${strings.get('sort.CREATED_DESCENDING')}`, value: '-created' },
+        { label: `${strings.get('sort.MODIFIED_ASCENDING')}`, value: 'modified' },
+        { label: `${strings.get('sort.MODIFIED_DESCENDING')}`, value: '-modified' },
+        { label: `${strings.get('sort.CAPACITY_ASCENDING')}`, value: 'capacity' },
+        { label: `${strings.get('sort.CAPACITY_DESCENDING')}`, value: '-capacity' }
+    ];
+
+    const removeStateParamsListener = $scope.$watchCollection('$state.params', () => {
+        setToolbarSort();
+    });
+
+    function setToolbarSort () {
+        const orderByValue = _.get($state.params, 'instance_search.order_by');
+        const sortValue = _.find(vm.toolbarSortOptions, (option) => option.value === orderByValue);
+        if (sortValue) {
+            vm.toolbarSortValue = sortValue;
+        } else {
+            vm.toolbarSortValue = toolbarSortDefault;
+        }
+    }
+
+    vm.onToolbarSort = (sort) => {
+        vm.toolbarSortValue = sort;
+
+        const queryParams = Object.assign(
+            {},
+            $state.params.instance_search,
+            paginateQuerySet,
+            { order_by: sort.value }
+        );
+
+        $state.go('.', {
+            instance_search: queryParams
+        }, { notify: false, location: 'replace' });
+    };
+
+    const tabObj = {};
+    const params = { instance_group_id: instanceGroup.get('id') };
+
+    tabObj.details = { _go: tabs.state.details._go, _params: params };
+    tabObj.instances = { _go: tabs.state.instances._go, _params: params, _active: true };
+    tabObj.jobs = { _go: tabs.state.jobs._go, _params: params };
+    vm.tab = tabObj;
+
 
     vm.tooltips = {
         add: strings.get('tooltips.ASSOCIATE_INSTANCES')
@@ -51,7 +128,7 @@ function InstancesController ($scope, $state, $http, models, strings, Dataset, P
     };
 
     vm.toggle = (toggled) => {
-        const instance = _.find(vm.instances, 'id', toggled.id);
+        const instance = _.find(vm.instances, ['id', toggled.id]);
         instance.enabled = !instance.enabled;
 
         const data = {
@@ -64,7 +141,6 @@ function InstancesController ($scope, $state, $http, models, strings, Dataset, P
             url: instance.url,
             data
         };
-
         $http(req).then(vm.onSaveSuccess)
             .catch(({data, status}) => {
                 ProcessErrors($scope, data, status, null, {
@@ -84,16 +160,37 @@ function InstancesController ($scope, $state, $http, models, strings, Dataset, P
         let selected = parseInt($state.params.instance_id);
         return id === selected;
     };
+
+    const removeUpdateDatasetListener = $scope.$on('updateDataset', (e, dataset, queryset) => {
+        vm.instances = dataset.results;
+        vm.instance_dataset = dataset;
+        paginateQuerySet = queryset;
+    });
+
+    const removeStateChangeListener = $transitions.onSuccess({}, function(trans) {
+        if (trans.to().name === 'instanceGroups.instances.modal.add') {
+            removeUpdateDatasetListener();
+            removeStateChangeListener();
+            removeStateParamsListener();
+        }
+    });
+
+    $scope.$on('$destroy', function() {
+        removeUpdateDatasetListener();
+        removeStateChangeListener();
+        removeStateParamsListener();
+    });
 }
 
 InstancesController.$inject = [
     '$scope',
     '$state',
     '$http',
+    '$transitions',
     'resolvedModels',
     'InstanceGroupsStrings',
     'Dataset',
-    'ProcessErrors'
+    'ProcessErrors',
 ];
 
 export default InstancesController;

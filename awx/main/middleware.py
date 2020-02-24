@@ -1,31 +1,26 @@
 # Copyright (c) 2015 Ansible, Inc.
 # All Rights Reserved.
 
-import base64
-import json
+import uuid
 import logging
 import threading
-import uuid
-import six
 import time
 import cProfile
 import pstats
 import os
-import re
+import urllib.parse
 
 from django.conf import settings
 from django.contrib.auth.models import User
-from django.core.exceptions import ObjectDoesNotExist
 from django.db.models.signals import post_save
 from django.db.migrations.executor import MigrationExecutor
 from django.db import IntegrityError, connection
-from django.http import HttpResponse
 from django.utils.functional import curry
 from django.shortcuts import get_object_or_404, redirect
 from django.apps import apps
+from django.utils.deprecation import MiddlewareMixin
 from django.utils.translation import ugettext_lazy as _
-from django.core.urlresolvers import reverse
-from django.urls import resolve
+from django.urls import reverse, resolve
 
 from awx.main.models import ActivityStream
 from awx.main.utils.named_url_graph import generate_graph, GraphNode
@@ -37,9 +32,9 @@ analytics_logger = logging.getLogger('awx.analytics.activity_stream')
 perf_logger = logging.getLogger('awx.analytics.performance')
 
 
-class TimingMiddleware(threading.local):
+class TimingMiddleware(threading.local, MiddlewareMixin):
 
-    dest = '/var/lib/awx/profile'
+    dest = '/var/log/tower/profile'
 
     def process_request(self, request):
         self.start_time = time.time()
@@ -62,22 +57,34 @@ class TimingMiddleware(threading.local):
     def save_profile_file(self, request):
         if not os.path.isdir(self.dest):
             os.makedirs(self.dest)
-        filename = '%.3fs-%s' % (pstats.Stats(self.prof).total_tt, uuid.uuid4())
+        filename = '%.3fs-%s.pstats' % (pstats.Stats(self.prof).total_tt, uuid.uuid4())
         filepath = os.path.join(self.dest, filename)
         with open(filepath, 'w') as f:
             f.write('%s %s\n' % (request.method, request.get_full_path()))
             pstats.Stats(self.prof, stream=f).sort_stats('cumulative').print_stats()
+
+        if settings.AWX_REQUEST_PROFILE_WITH_DOT:
+            from gprof2dot import main as generate_dot
+            raw = os.path.join(self.dest, filename) + '.raw'
+            pstats.Stats(self.prof).dump_stats(raw)
+            generate_dot([
+                '-n', '2.5', '-f', 'pstats', '-o',
+                os.path.join( self.dest, filename).replace('.pstats', '.dot'),
+                raw
+            ])
+            os.remove(raw)
         return filepath
 
 
-class ActivityStreamMiddleware(threading.local):
+class ActivityStreamMiddleware(threading.local, MiddlewareMixin):
 
-    def __init__(self):
+    def __init__(self, get_response=None):
         self.disp_uid = None
         self.instance_ids = []
+        super().__init__(get_response)
 
     def process_request(self, request):
-        if hasattr(request, 'user') and hasattr(request.user, 'is_authenticated') and request.user.is_authenticated():
+        if hasattr(request, 'user') and request.user.is_authenticated:
             user = request.user
         else:
             user = None
@@ -124,15 +131,19 @@ class ActivityStreamMiddleware(threading.local):
                     self.instance_ids.append(instance.id)
 
 
-class SessionTimeoutMiddleware(object):
+class SessionTimeoutMiddleware(MiddlewareMixin):
     """
     Resets the session timeout for both the UI and the actual session for the API
     to the value of SESSION_COOKIE_AGE on every request if there is a valid session.
     """
 
     def process_response(self, request, response):
-        req_session = getattr(request, 'session', None)
-        if req_session and not req_session.is_empty():
+        should_skip = 'HTTP_X_WS_SESSION_QUIET' in request.META
+        # Something went wrong, such as upgrade-in-progress page
+        if not hasattr(request, 'session'):
+            return response
+        # Only update the session if it hasn't been flushed by being forced to log out.
+        if request.session and not request.session.is_empty() and not should_skip:
             expiry = int(settings.SESSION_COOKIE_AGE)
             request.session.set_expiry(expiry)
             response['Session-Timeout'] = expiry
@@ -153,9 +164,9 @@ def _customize_graph():
         settings.NAMED_URL_GRAPH[Instance].add_bindings()
 
 
-class URLModificationMiddleware(object):
+class URLModificationMiddleware(MiddlewareMixin):
 
-    def __init__(self):
+    def __init__(self, get_response=None):
         models = [m for m in apps.get_app_config('main').get_models() if hasattr(m, 'get_absolute_url')]
         generate_graph(models)
         _customize_graph()
@@ -179,6 +190,7 @@ class URLModificationMiddleware(object):
             category=_('Named URL'),
             category_slug='named-url',
         )
+        super().__init__(get_response)
 
     def _named_url_to_pk(self, node, named_url):
         kwargs = {}
@@ -199,7 +211,7 @@ class URLModificationMiddleware(object):
 
     def process_request(self, request):
         if hasattr(request, 'environ') and 'REQUEST_URI' in request.environ:
-            old_path = six.moves.urllib.parse.urlsplit(request.environ['REQUEST_URI']).path
+            old_path = urllib.parse.urlsplit(request.environ['REQUEST_URI']).path
             old_path = old_path[request.path.find(request.path_info):]
         else:
             old_path = request.path_info
@@ -209,60 +221,7 @@ class URLModificationMiddleware(object):
             request.path_info = new_path
 
 
-class DeprecatedAuthTokenMiddleware(object):
-    """
-    Used to emulate support for the old Auth Token endpoint to ease the
-    transition to OAuth2.0.  Specifically, this middleware:
-
-    1.  Intercepts POST requests to `/api/v2/authtoken/` (which now no longer
-        _actually_ exists in our urls.py)
-    2.  Rewrites `request.path` to `/api/v2/users/N/personal_tokens/`
-    3.  Detects the username and password in the request body (either in JSON,
-        or form-encoded variables) and builds an appropriate HTTP_AUTHORIZATION
-        Basic header
-    """
-
-    def process_request(self, request):
-        if re.match('^/api/v[12]/authtoken/?$', request.path):
-            if request.method != 'POST':
-                return HttpResponse('HTTP {} is not allowed.'.format(request.method), status=405)
-            try:
-                payload = json.loads(request.body)
-            except (ValueError, TypeError):
-                payload = request.POST
-            if 'username' not in payload or 'password' not in payload:
-                return HttpResponse('Unable to login with provided credentials.', status=401)
-            username = payload['username']
-            password = payload['password']
-            try:
-                pk = User.objects.get(username=username).pk
-            except ObjectDoesNotExist:
-                return HttpResponse('Unable to login with provided credentials.', status=401)
-            new_path = reverse('api:user_personal_token_list', kwargs={
-                'pk': pk,
-                'version': 'v2'
-            })
-            request._body = ''
-            request.META['CONTENT_TYPE'] = 'application/json'
-            request.path = request.path_info = new_path
-            auth = ' '.join([
-                'Basic',
-                base64.b64encode(
-                    six.text_type('{}:{}').format(username, password)
-                )
-            ])
-            request.environ['HTTP_AUTHORIZATION'] = auth
-            logger.warn(
-                'The Auth Token API (/api/v2/authtoken/) is deprecated and will '
-                'be replaced with OAuth2.0 in the next version of Ansible Tower '
-                '(see /api/o/ for more details).'
-            )
-        elif request.environ.get('HTTP_AUTHORIZATION', '').startswith('Token '):
-            token = request.environ['HTTP_AUTHORIZATION'].split(' ', 1)[-1].strip()
-            request.environ['HTTP_AUTHORIZATION'] = six.text_type('Bearer {}').format(token)
-
-
-class MigrationRanCheckMiddleware(object):
+class MigrationRanCheckMiddleware(MiddlewareMixin):
 
     def process_request(self, request):
         executor = MigrationExecutor(connection)

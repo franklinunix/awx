@@ -32,17 +32,26 @@ function JobStatusService (moment, message) {
             counts: {
                 plays: 0,
                 tasks: 0,
-                hosts: 1,
+                hosts: 0,
             },
             hosts: {},
             status: model.get('status'),
             elapsed: model.get('elapsed'),
             started: model.get('started'),
             finished: model.get('finished'),
+            environment: model.get('custom_virtualenv'),
+            artifacts: model.get('artifacts'),
             scm: {
                 id: model.get('summary_fields.project_update.id'),
                 status: model.get('summary_fields.project_update.status')
             },
+            scmBranch: model.get('scm_branch'),
+            scmRefspec: model.get('scm_refspec'),
+            inventoryScm: {
+                id: model.get('source_project_update'),
+                status: model.get('summary_fields.inventory_source.status')
+            },
+            event_processing_finished: model.get('event_processing_finished'),
         };
 
         this.initHostStatusCounts({ model });
@@ -85,13 +94,21 @@ function JobStatusService (moment, message) {
     this.pushStatusEvent = data => {
         const isJobStatusEvent = (this.job === data.unified_job_id);
         const isProjectStatusEvent = (this.project && (this.project === data.project_id));
+        const isInventoryScmStatus = (this.model.get('source_project_update') === data.unified_job_id);
 
         if (isJobStatusEvent) {
             this.setJobStatus(data.status);
+            if (JOB_STATUS_FINISHED.includes(data.status)) {
+                this.sync();
+            }
             this.dispatch();
         } else if (isProjectStatusEvent) {
             this.setProjectStatus(data.status);
             this.setProjectUpdateId(data.unified_job_id);
+            this.dispatch();
+        } else if (isInventoryScmStatus) {
+            this.setInventoryScmStatus(data.status);
+            this.setInventoryScmId(data.unified_job_id);
             this.dispatch();
         }
     };
@@ -248,6 +265,14 @@ function JobStatusService (moment, message) {
         this.state.scm.id = id;
     };
 
+    this.setInventoryScmStatus = status => {
+        this.state.inventoryScm.status = status;
+    };
+
+    this.setInventoryScmId = id => {
+        this.state.inventoryScm.id = id;
+    };
+
     this.setFinished = time => {
         if (!time) return;
 
@@ -255,10 +280,38 @@ function JobStatusService (moment, message) {
         this.updateRunningState();
     };
 
+    this.setEnvironment = env => {
+        if (!env) return;
+
+        this.state.environment = env;
+    };
+
+    this.setArtifacts = val => {
+        if (!val) return;
+
+        this.state.artifacts = val;
+    };
+
+    this.setExecutionNode = node => {
+        if (!node) return;
+
+        this.state.executionNode = node;
+    };
+
     this.setStatsEvent = data => {
         if (!data) return;
 
         this.statsEvent = data;
+    };
+
+    this.setResultTraceback = traceback => {
+        if (!traceback) return;
+
+        this.state.resultTraceback = traceback;
+    };
+
+    this.setEventProcessingFinished = val => {
+        this.state.event_processing_finished = val;
     };
 
     this.setHostStatusCounts = counts => {
@@ -296,6 +349,11 @@ function JobStatusService (moment, message) {
                 this.setElapsed(model.get('elapsed'));
                 this.setStarted(model.get('started'));
                 this.setJobStatus(model.get('status'));
+                this.setEnvironment(model.get('custom_virtualenv'));
+                this.setArtifacts(model.get('artifacts'));
+                this.setExecutionNode(model.get('execution_node'));
+                this.setResultTraceback(model.get('result_traceback'));
+                this.setEventProcessingFinished(model.get('event_processing_finished'));
 
                 this.initHostStatusCounts({ model });
                 this.initPlaybookCounts({ model });

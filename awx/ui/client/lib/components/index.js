@@ -1,7 +1,11 @@
 import atLibServices from '~services';
 
 import actionGroup from '~components/action/action-group.directive';
+import actionButton from '~components/action/action-button.directive';
+import approvalsDrawer from '~components/approvalsDrawer/approvalsDrawer.directive';
+import dialog from '~components/dialog/dialog.component';
 import divider from '~components/utility/divider.directive';
+import dynamicSelect from '~components/input/dynamic-select.directive';
 import form from '~components/form/form.directive';
 import formAction from '~components/form/action.directive';
 import inputCheckbox from '~components/input/checkbox.directive';
@@ -19,6 +23,7 @@ import inputTextareaSecret from '~components/input/textarea-secret.directive';
 import launchTemplate from '~components/launchTemplateButton/launchTemplateButton.component';
 import layout from '~components/layout/layout.directive';
 import list from '~components/list/list.directive';
+import lookupList from '~components/lookup-list/lookup-list.component';
 import modal from '~components/modal/modal.directive';
 import panel from '~components/panel/panel.directive';
 import panelBody from '~components/panel/body.directive';
@@ -34,9 +39,14 @@ import tab from '~components/tabs/tab.directive';
 import tabGroup from '~components/tabs/group.directive';
 import tag from '~components/tag/tag.directive';
 import toggleTag from '~components/toggle-tag/toggle-tag.directive';
+import toolbar from '~components/list/list-toolbar.directive';
 import topNavItem from '~components/layout/top-nav-item.directive';
 import truncate from '~components/truncate/truncate.directive';
 import atCodeMirror from '~components/code-mirror';
+import atSyntaxHighlight from '~components/syntax-highlight';
+import card from '~components/cards/card.directive';
+import cardGroup from '~components/cards/group.directive';
+import atSwitch from '~components/switch/switch.directive';
 
 import BaseInputController from '~components/input/base.controller';
 import ComponentsStrings from '~components/components.strings';
@@ -46,10 +56,15 @@ const MODULE_NAME = 'at.lib.components';
 angular
     .module(MODULE_NAME, [
         atLibServices,
-        atCodeMirror
+        atCodeMirror,
+        atSyntaxHighlight,
     ])
     .directive('atActionGroup', actionGroup)
+    .directive('atActionButton', actionButton)
+    .directive('atApprovalsDrawer', approvalsDrawer)
+    .component('atDialog', dialog)
     .directive('atDivider', divider)
+    .directive('atDynamicSelect', dynamicSelect)
     .directive('atForm', form)
     .directive('atFormAction', formAction)
     .directive('atInputCheckbox', inputCheckbox)
@@ -67,6 +82,8 @@ angular
     .component('atLaunchTemplate', launchTemplate)
     .directive('atLayout', layout)
     .directive('atList', list)
+    .component('atLookupList', lookupList)
+    .directive('atListToolbar', toolbar)
     .component('atRelaunch', relaunch)
     .directive('atRow', row)
     .directive('atRowItem', rowItem)
@@ -84,6 +101,9 @@ angular
     .directive('atToggleTag', toggleTag)
     .directive('atTopNavItem', topNavItem)
     .directive('atTruncate', truncate)
+    .directive('atCard', card)
+    .directive('atCardGroup', cardGroup)
+    .directive('atSwitch', atSwitch)
     .service('BaseInputController', BaseInputController)
     .service('ComponentsStrings', ComponentsStrings);
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-import mock # noqa
+from unittest import mock # noqa
 import pytest
 
 from awx.api.versioning import reverse
@@ -173,13 +173,6 @@ def test_team_project_list(get, team_project_list):
 
     # alice should see all projects they can see when viewing an admin
     assert get(reverse('api:user_projects_list', kwargs={'pk':admin.pk,}), alice).data['count'] == 2
-
-
-@pytest.mark.django_db
-def test_team_project_list_fail1(get, team_project_list):
-    objects = team_project_list
-    res = get(reverse('api:team_projects_list', kwargs={'pk':objects.teams.team2.pk,}), objects.users.alice)
-    assert res.status_code == 403
 
 
 @pytest.mark.parametrize("u,expected_status_code", [

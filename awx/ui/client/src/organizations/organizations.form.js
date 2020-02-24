@@ -54,6 +54,21 @@ export default ['NotificationsList', 'i18n',
                     dataPlacement: 'right',
                     ngDisabled: '!(organization_obj.summary_fields.user_capabilities.edit || canAdd)',
                     ngShow: 'custom_virtualenvs_visible'
+                },
+                max_hosts: {
+                    label: i18n._('Max Hosts'),
+                    type: 'number',
+                    integer: true,
+                    min: 0,
+                    max: 2147483647,
+                    default: 0,
+                    spinner: true,
+                    dataTitle: i18n._('Max Hosts'),
+                    dataPlacement: 'right',
+                    dataContainer: 'body',
+                    awPopOver: "<p>" + i18n._("The maximum number of hosts allowed to be managed by this organization. Value defaults to 0 which means no limit. Refer to the Ansible documentation for more details.") + "</p>",
+                    ngDisabled: '!current_user.is_superuser',
+                    ngShow: 'BRAND_NAME === "Tower"'
                 }
             },
 
@@ -78,7 +93,7 @@ export default ['NotificationsList', 'i18n',
                     name: 'users',
                     dataPlacement: 'top',
                     awToolTip: i18n._('Please save before adding users.'),
-                    basePath: 'api/v2/organizations/{{$stateParams.organization_id}}/access_list/',
+                    basePath: 'api/v2/organizations/{{$stateParams.organization_id}}/users/',
                     search: {
                         order_by: 'username'
                     },
@@ -103,13 +118,60 @@ export default ['NotificationsList', 'i18n',
                             key: true,
                             label: i18n._('User'),
                             linkBase: 'users',
-                            class: 'col-lg-3 col-md-3 col-sm-3 col-xs-4'
+                            columnClass: 'col-sm-4'
+                        },
+                        first_name: {
+                            label: i18n._('First name'),
+                            columnClass: 'col-sm-4'
+                        },
+                        last_name: {
+                            label: i18n._('Last name'),
+                            columnClass: 'col-sm-4'
+                        }
+                    }
+                },
+                permissions: {
+                    name: 'permissions',
+                    awToolTip: i18n._('Please save before assigning permissions.'),
+                    djangoModel: 'access_list',
+                    dataPlacement: 'top',
+                    basePath: 'api/v2/organizations/{{$stateParams.organization_id}}/access_list/',
+                    search: {
+                        order_by: 'username'
+                    },
+                    type: 'collection',
+                    title: i18n._('Permissions'),
+                    iterator: 'permission',
+                    index: false,
+                    open: false,
+                    actions: {
+                        add: {
+                            ngClick: "$state.go('.add')",
+                            label: i18n._('Add'),
+                            awToolTip: i18n._('Add a permission'),
+                            actionClass: 'at-Button--add',
+                            actionId: 'button-add',
+                            ngShow: '(organization_obj.summary_fields.user_capabilities.edit || canAdd)'
+                        }
+                    },
+                    fields: {
+                        username: {
+                            key: true,
+                            label: i18n._('User'),
+                            linkBase: 'users',
+                            columnClass: 'col-lg-3 col-md-3 col-sm-3 col-xs-4'
                         },
                         role: {
                             label: i18n._('Role'),
                             type: 'role',
                             nosort: true,
-                            class: 'col-lg-4 col-md-4 col-sm-4 col-xs-4'
+                            columnClass: 'col-lg-4 col-md-4 col-sm-4 col-xs-4',
+                        },
+                        team_roles: {
+                            label: i18n._('Team Roles'),
+                            type: 'team_roles',
+                            nosort: true,
+                            columnClass: 'col-lg-5 col-md-5 col-sm-5 col-xs-4',
                         }
                     }
                 },

@@ -4,80 +4,86 @@
  * All Rights Reserved
  *************************************************/
 
-export default ['$scope', 'WorkflowService', 'GetBasePath', 'TemplatesService',
-    '$state', 'ProcessErrors', 'CreateSelect2', '$q', 'JobTemplateModel',
-    'Empty', 'PromptService', 'Rest', 'TemplatesStrings', '$timeout',
-    'i18n',
-    function($scope, WorkflowService, GetBasePath, TemplatesService,
-    $state, ProcessErrors, CreateSelect2, $q, JobTemplate,
-    Empty, PromptService, Rest, TemplatesStrings, $timeout, i18n) {
+export default ['$scope', 'TemplatesService',
+    'ProcessErrors', '$q', 'Rest',
+    'PromptService', 'TemplatesStrings', 'WorkflowChartService',
+    'Wait', '$state',
+    function ($scope, TemplatesService,
+        ProcessErrors, $q, Rest,
+        PromptService, TemplatesStrings, WorkflowChartService,
+        Wait, $state
+    ) {
 
-        let promptWatcher, surveyQuestionWatcher, credentialsWatcher;
+        let deletedNodeIds = [];
+        let workflowMakerNodeIdCounter;
+        let nodeIdToChartNodeIdMapping = {};
+        let nodeRef = {};
+        let allNodes = [];
+        let page = 1;
 
         $scope.strings = TemplatesStrings;
         $scope.preventCredsWithPasswords = true;
-
-        $scope.workflowMakerFormConfig = {
-            nodeMode: "idle",
-            activeTab: "jobs",
-            formIsValid: false
-        };
-
-        $scope.job_type_options = [{
-            label: $scope.strings.get('workflow_maker.RUN'),
-            value: "run"
-        }, {
-            label: $scope.strings.get('workflow_maker.CHECK'),
-            value: "check"
-        }];
-
-        $scope.edgeFlags = {
-             conflict: false
-         };
-
-         $scope.edgeTypeOptions = [
-             {
-                 label: $scope.strings.get('workflow_maker.ALWAYS'),
-                 value: 'always'
-             },
-             {
-                 label: $scope.strings.get('workflow_maker.ON_SUCCESS'),
-                 value: 'success'
-             },
-             {
-                 label: $scope.strings.get('workflow_maker.ON_FAILURE'),
-                 value: 'failure'
-             }
-         ];
-
-        let editRequests = [];
-        let associateRequests = [];
-        let disassociateRequests = [];
-        let credentialRequests = [];
-
         $scope.showKey = false;
         $scope.toggleKey = () => $scope.showKey = !$scope.showKey;
         $scope.keyClassList = `{ 'Key-menuIcon--active': showKey }`;
+        $scope.readOnly = !_.get($scope, 'workflowJobTemplateObj.summary_fields.user_capabilities.edit');
+        $scope.formState = {
+            'showNodeForm': false,
+            'showLinkForm': false
+        };
 
-        function resetNodeForm() {
-            $scope.workflowMakerFormConfig.nodeMode = "idle";
-            delete $scope.selectedTemplate;
-            delete $scope.placeholderNode;
-            delete $scope.betweenTwoNodes;
-            $scope.nodeBeingEdited = null;
-            $scope.workflowMakerFormConfig.activeTab = "jobs";
+        $scope.workflowChangesUnsaved = false;
+        $scope.workflowChangesStarted = false;
 
-            $scope.$broadcast('clearWorkflowLists');
-        }
+        $scope.cancelUnsavedChanges = () => {
+            $scope.unsavedChangesVisible = false;
+        };
 
-        function recursiveNodeUpdates(params, completionCallback) {
-            // params.parentId
-            // params.node
+        let getNodes = () => {
+            Wait('start');
+            TemplatesService.getWorkflowJobTemplateNodes($scope.workflowJobTemplateObj.id, page)
+                .then(({data}) => {
+                    for (let i = 0; i < data.results.length; i++) {
+                        allNodes.push(data.results[i]);
+                    }
+                    if (data.next) {
+                        // Get the next page
+                        page++;
+                        getNodes();
+                    } else {
+                        let arrayOfLinksForChart = [];
+                        let arrayOfNodesForChart = [];
 
-            let buildSendableNodeData = function() {
+                        ({arrayOfNodesForChart, arrayOfLinksForChart, nodeIdToChartNodeIdMapping, nodeRef, workflowMakerNodeIdCounter} = WorkflowChartService.generateArraysOfNodesAndLinks(allNodes));
+
+                        $scope.graphState = { arrayOfNodesForChart, arrayOfLinksForChart };
+
+                        Wait('stop');
+                    }
+                }, ({ data, status, config }) => {
+                    Wait('stop');
+                    ProcessErrors($scope, data, status, null, {
+                        hdr: $scope.strings.get('error.HEADER'),
+                        msg: $scope.strings.get('error.CALL', {
+                            path: `${config.url}`,
+                            action: `${config.method}`,
+                            status
+                        })
+                    });
+                });
+        };
+
+        getNodes();
+
+        $scope.saveWorkflowMaker = () => {
+
+            Wait('start');
+
+            $scope.unsavedChangesVisible = false;
+
+            let buildSendableNodeData = (node) => {
                 // Create the node
                 let sendableNodeData = {
-                    unified_job_template: params.node.unifiedJobTemplate.id,
                     extra_data: {},
                     inventory: null,
                     job_type: null,
@@ -86,16 +92,24 @@ export default ['$scope', 'WorkflowService', 'GetBasePath', 'TemplatesService',
                     limit: null,
                     diff_mode: null,
                     verbosity: null,
-                    credential: null
+                    credential: null,
+                    all_parents_must_converge: _.get(node, 'all_parents_must_converge', false)
                 };
 
-                if (_.has(params, 'node.promptData.extraVars')) {
-                    if (_.get(params, 'node.promptData.launchConf.defaults.extra_vars')) {
-                        const defaultVars = jsyaml.safeLoad(params.node.promptData.launchConf.defaults.extra_vars);
+                if (_.has(node, 'fullUnifiedJobTemplateObject')) {
+                    sendableNodeData.unified_job_template = node.fullUnifiedJobTemplateObject.id;
+                }
+
+                if (_.has(node, 'promptData.extraVars')) {
+                    const formVars = node.promptData.extraVars;
+                    const formVarsJSON = typeof formVars === 'string' ? jsyaml.safeLoad(formVars) : formVars;
+                    if (_.get(node, 'promptData.launchConf.defaults.extra_vars')) {
+                        const defaultVars = node.promptData.launchConf.defaults.extra_vars;
+                        const defaultVarsJSON = typeof defaultVars === 'string' ? jsyaml.safeLoad(defaultVars) : defaultVars;
 
                         // Only include extra vars that differ from the template default vars
-                        _.forOwn(params.node.promptData.extraVars, (value, key) => {
-                            if (!defaultVars[key] || defaultVars[key] !== value) {
+                        _.forOwn(formVarsJSON, (value, key) => {
+                            if (!defaultVarsJSON[key] || defaultVarsJSON[key] !== value) {
                                 sendableNodeData.extra_data[key] = value;
                             }
                         });
@@ -103,8 +117,8 @@ export default ['$scope', 'WorkflowService', 'GetBasePath', 'TemplatesService',
                             delete sendableNodeData.extra_data;
                         }
                     } else {
-                        if (_.has(params, 'node.promptData.extraVars') && !_.isEmpty(params.node.promptData.extraVars)) {
-                            sendableNodeData.extra_data = params.node.promptData.extraVars;
+                        if (_.has(node, 'promptData.extraVars') && !_.isEmpty(formVarsJSON)) {
+                            sendableNodeData.extra_data = formVarsJSON;
                         }
                     }
                 }
@@ -112,9 +126,13 @@ export default ['$scope', 'WorkflowService', 'GetBasePath', 'TemplatesService',
                 // Check to see if the user has provided any prompt values that are different
                 // from the defaults in the job template
 
-                if (params.node.unifiedJobTemplate.type === "job_template" && params.node.promptData) {
+                if (_.has(node, 'fullUnifiedJobTemplateObject') &&
+                    (node.fullUnifiedJobTemplateObject.type === "workflow_job_template" ||
+                    node.fullUnifiedJobTemplateObject.type === "job_template") &&
+                    node.promptData
+                ) {
                     sendableNodeData = PromptService.bundlePromptDataForSaving({
-                        promptData: params.node.promptData,
+                        promptData: node.promptData,
                         dataToSave: sendableNodeData
                     });
                 }
@@ -122,1145 +140,959 @@ export default ['$scope', 'WorkflowService', 'GetBasePath', 'TemplatesService',
                 return sendableNodeData;
             };
 
-            let continueRecursing = function(parentId) {
-                $scope.totalIteratedNodes++;
+            if ($scope.graphState.arrayOfNodesForChart.length > 1) {
+                let approvalTemplatePromises = [];
+                let addPromises = [];
+                let editPromises = [];
+                let credentialRequests = [];
 
-                if ($scope.totalIteratedNodes === $scope.treeData.data.totalNodes) {
-                    // We're done recursing, lets move on
-                    completionCallback();
-                } else {
-                    if (params.node.children && params.node.children.length > 0) {
-                        _.forEach(params.node.children, function(child) {
-                            if (child.edgeType === "success") {
-                                recursiveNodeUpdates({
-                                    parentId: parentId,
-                                    node: child
-                                }, completionCallback);
-                            } else if (child.edgeType === "failure") {
-                                recursiveNodeUpdates({
-                                    parentId: parentId,
-                                    node: child
-                                }, completionCallback);
-                            } else if (child.edgeType === "always") {
-                                recursiveNodeUpdates({
-                                    parentId: parentId,
-                                    node: child
-                                }, completionCallback);
+                Object.keys(nodeRef).map((workflowMakerNodeId) => {
+                    const node = nodeRef[workflowMakerNodeId];
+                    if (node.isNew) {
+                        if (node.unifiedJobTemplate && node.unifiedJobTemplate.unified_job_type === "workflow_approval") {
+                            addPromises.push(TemplatesService.addWorkflowNode({
+                                url: $scope.workflowJobTemplateObj.related.workflow_nodes,
+                                data: {}
+                            }).then(({data: newNodeData}) => {
+                                Rest.setUrl(newNodeData.related.create_approval_template);
+                                approvalTemplatePromises.push(Rest.post({
+                                    name: node.unifiedJobTemplate.name,
+                                    description: node.unifiedJobTemplate.description,
+                                    timeout: node.unifiedJobTemplate.timeout
+                                }).then(() => {
+                                    node.originalNodeObject = newNodeData;
+                                    nodeIdToChartNodeIdMapping[newNodeData.id] = parseInt(workflowMakerNodeId);
+                                }).catch(({ data, status }) => {
+                                    Wait('stop');
+                                    ProcessErrors($scope, data, status, null, {
+                                        hdr: $scope.strings.get('error.HEADER')
+                                    });
+                                }));
+                            }).catch(({ data, status }) => {
+                                Wait('stop');
+                                ProcessErrors($scope, data, status, null, {
+                                    hdr: $scope.strings.get('error.HEADER')
+                                });
+                            }));
+                        } else {
+                            addPromises.push(TemplatesService.addWorkflowNode({
+                                url: $scope.workflowJobTemplateObj.related.workflow_nodes,
+                                data: buildSendableNodeData(node)
+                            }).then(({data: newNodeData}) => {
+                                node.originalNodeObject = newNodeData;
+                                nodeIdToChartNodeIdMapping[newNodeData.id] = parseInt(workflowMakerNodeId);
+                                if (_.get(node, 'promptData.launchConf.ask_credential_on_launch')) {
+                                    // This finds the credentials that were selected in the prompt but don't occur
+                                    // in the template defaults
+                                    let credentialIdsToPost = node.promptData.prompts.credentials.value.filter((credFromPrompt) => {
+                                        let defaultCreds = _.get(node, 'promptData.launchConf.defaults.credentials', []);
+                                        return !defaultCreds.some((defaultCred) => {
+                                            return credFromPrompt.id === defaultCred.id;
+                                        });
+                                    });
+
+                                    credentialIdsToPost.forEach((credentialToPost) => {
+                                        credentialRequests.push({
+                                            id: newNodeData.id,
+                                            data: {
+                                                id: credentialToPost.id
+                                            }
+                                        });
+                                    });
+                                }
+                            }).catch(({ data, status }) => {
+                                Wait('stop');
+                                ProcessErrors($scope, data, status, null, {
+                                    hdr: $scope.strings.get('error.HEADER')
+                                });
+                            }));
+                        }
+                    } else if (node.isEdited) {
+                        if (node.unifiedJobTemplate && node.unifiedJobTemplate.unified_job_type === "workflow_approval") {
+                            if (node.originalNodeObject.summary_fields.unified_job_template.unified_job_type === "workflow_approval") {
+                                Rest.setUrl(node.originalNodeObject.related.unified_job_template);
+                                approvalTemplatePromises.push(Rest.patch({
+                                    name: node.unifiedJobTemplate.name,
+                                    description: node.unifiedJobTemplate.description,
+                                    timeout: node.unifiedJobTemplate.timeout
+                                }).catch(({ data, status }) => {
+                                    Wait('stop');
+                                    ProcessErrors($scope, data, status, null, {
+                                        hdr: $scope.strings.get('error.HEADER')
+                                    });
+                                }));
+                            } else {
+                                Rest.setUrl(node.originalNodeObject.related.create_approval_template);
+                                approvalTemplatePromises.push(Rest.post({
+                                    name: node.unifiedJobTemplate.name,
+                                    description: node.unifiedJobTemplate.description,
+                                    timeout: node.unifiedJobTemplate.timeout
+                                }).catch(({ data, status }) => {
+                                    Wait('stop');
+                                    ProcessErrors($scope, data, status, null, {
+                                        hdr: $scope.strings.get('error.HEADER')
+                                    });
+                                }));
                             }
-                        });
-                    }
-                }
-            };
-
-            if (params.node.isNew) {
-
-                TemplatesService.addWorkflowNode({
-                    url: $scope.treeData.workflow_job_template_obj.related.workflow_nodes,
-                    data: buildSendableNodeData()
-                })
-                .then(function(data) {
-
-                    if (!params.node.isRoot) {
-                        associateRequests.push({
-                            parentId: params.parentId,
-                            nodeId: data.data.id,
-                            edge: params.node.edgeType
-                        });
-                    }
-
-                    if (_.get(params, 'node.promptData.launchConf.ask_credential_on_launch')){
-                         // This finds the credentials that were selected in the prompt but don't occur
-                         // in the template defaults
-                         let credentialsToPost = params.node.promptData.prompts.credentials.value.filter(function(credFromPrompt) {
-                             let defaultCreds = params.node.promptData.launchConf.defaults.credentials ? params.node.promptData.launchConf.defaults.credentials : [];
-                             return !defaultCreds.some(function(defaultCred) {
-                                 return credFromPrompt.id === defaultCred.id;
-                             });
-                         });
-
-                         credentialsToPost.forEach((credentialToPost) => {
-                             credentialRequests.push({
-                                 id: data.data.id,
-                                 data: {
-                                     id: credentialToPost.id
-                                 }
-                             });
-                         });
-                     }
-
-                    params.node.isNew = false;
-                    continueRecursing(data.data.id);
-                }, function(error) {
-                    ProcessErrors($scope, error.data, error.status, null, {
-                        hdr: 'Error!',
-                        msg: 'Failed to add workflow node. ' +
-                        'POST returned status: ' +
-                        error.status
-                    });
-                });
-            } else {
-                if (params.node.edited || !params.node.originalParentId || (params.node.originalParentId && params.parentId !== params.node.originalParentId)) {
-
-                    if (params.node.edited) {
-
-                        editRequests.push({
-                            id: params.node.nodeId,
-                            data: buildSendableNodeData()
-                        });
-
-                        if (_.get(params, 'node.promptData.launchConf.ask_credential_on_launch')){
-                             let credentialsNotInPriorCredentials = params.node.promptData.prompts.credentials.value.filter(function(credFromPrompt) {
-                                 let defaultCreds = params.node.promptData.launchConf.defaults.credentials ? params.node.promptData.launchConf.defaults.credentials : [];
-                                 return !defaultCreds.some(function(defaultCred) {
-                                     return credFromPrompt.id === defaultCred.id;
-                                 });
-                             });
-
-                             let credentialsToAdd = credentialsNotInPriorCredentials.filter(function(credNotInPrior) {
-                                 let previousOverrides = params.node.promptData.prompts.credentials.previousOverrides ? params.node.promptData.prompts.credentials.previousOverrides : [];
-                                 return !previousOverrides.some(function(priorCred) {
-                                     return credNotInPrior.id === priorCred.id;
-                                 });
-                             });
-
-                             let credentialsToRemove = [];
-
-                             if (_.has(params, 'node.promptData.prompts.credentials.previousOverrides')) {
-                                 credentialsToRemove = params.node.promptData.prompts.credentials.previousOverrides.filter(function(priorCred) {
-                                     return !credentialsNotInPriorCredentials.some(function(credNotInPrior) {
-                                         return priorCred.id === credNotInPrior.id;
-                                     });
-                                 });
-                             }
-
-                             credentialsToAdd.forEach((credentialToAdd) => {
-                                 credentialRequests.push({
-                                     id: params.node.nodeId,
-                                     data: {
-                                         id: credentialToAdd.id
-                                     }
-                                 });
-                             });
-
-                             credentialsToRemove.forEach((credentialToRemove) => {
-                                 credentialRequests.push({
-                                     id: params.node.nodeId,
-                                     data: {
-                                         id: credentialToRemove.id,
-                                         disassociate: true
-                                     }
-                                 });
-                             });
-                         }
-                    }
-
-                    if (params.node.originalParentId && (params.parentId !== params.node.originalParentId || params.node.originalEdge !== params.node.edgeType)) {
-                        let parentIsDeleted = false;
-
-                        _.forEach($scope.treeData.data.deletedNodes, function(deletedNode) {
-                            if (deletedNode === params.node.originalParentId) {
-                                parentIsDeleted = true;
-                            }
-                        });
-
-                        if (!parentIsDeleted) {
-                            disassociateRequests.push({
-                                parentId: params.node.originalParentId,
-                                nodeId: params.node.nodeId,
-                                edge: params.node.originalEdge
-                            });
+                        } else {
+                            editPromises.push(TemplatesService.editWorkflowNode({
+                                id: node.originalNodeObject.id,
+                                data: buildSendableNodeData(node)
+                            }));
                         }
 
-                        // Can only associate if we have a parent.
-                        // If we don't have a parent then this is a root node
-                        // and the act of disassociating will make it a root node
-                        if (params.parentId) {
-                            associateRequests.push({
-                                parentId: params.parentId,
-                                nodeId: params.node.nodeId,
-                                edge: params.node.edgeType
+                        if (_.get(node, 'promptData.launchConf.ask_credential_on_launch')) {
+                            let credentialsNotInPriorCredentials = node.promptData.prompts.credentials.value.filter((credFromPrompt) => {
+                                let defaultCreds = _.get(node, 'promptData.launchConf.defaults.credentials', []);
+                                return !defaultCreds.some((defaultCred) => {
+                                    return credFromPrompt.id === defaultCred.id;
+                                });
+                            });
+
+                            let credentialsToAdd = credentialsNotInPriorCredentials.filter((credNotInPrior) => {
+                                let previousOverrides = _.get(node, 'promptData.prompts.credentials.previousOverrides', []);
+                                return !previousOverrides.some((priorCred) => {
+                                    return credNotInPrior.id === priorCred.id;
+                                });
+                            });
+
+                            let credentialsToRemove = [];
+
+                            if (_.has(node, 'promptData.prompts.credentials.previousOverrides')) {
+                                credentialsToRemove = node.promptData.prompts.credentials.previousOverrides.filter((priorCred) => {
+                                    return !credentialsNotInPriorCredentials.some((credNotInPrior) => {
+                                        return priorCred.id === credNotInPrior.id;
+                                    });
+                                });
+                            }
+
+                            credentialsToAdd.forEach((credentialToAdd) => {
+                                credentialRequests.push({
+                                    id: node.originalNodeObject.id,
+                                    data: {
+                                        id: credentialToAdd.id
+                                    }
+                                });
+                            });
+
+                            credentialsToRemove.forEach((credentialToRemove) => {
+                                credentialRequests.push({
+                                    id: node.originalNodeObject.id,
+                                    data: {
+                                        id: credentialToRemove.id,
+                                        disassociate: true
+                                    }
+                                });
                             });
                         }
-
-                    } else if (!params.node.originalParentId && params.parentId) {
-                        // This used to be a root node but is now not a root node
-                        associateRequests.push({
-                            parentId: params.parentId,
-                            nodeId: params.node.nodeId,
-                            edge: params.node.edgeType
-                        });
                     }
 
-                }
-
-                continueRecursing(params.node.nodeId);
-            }
-        }
-
-        let updateEdgeDropdownOptions = (optionsToInclude) => {
-            // Not passing optionsToInclude will include all by default
-            if (!optionsToInclude) {
-                $scope.edgeTypeOptions = [
-                    {
-                        label: i18n._('Always'),
-                        value: 'always'
-                    },
-                    {
-                        label: i18n._('On Success'),
-                        value: 'success'
-                    },
-                    {
-                        label: i18n._('On Failure'),
-                        value: 'failure'
-                    }
-                ];
-            } else {
-                $scope.edgeTypeOptions = [];
-
-                optionsToInclude.forEach((optionToInclude) => {
-                    if (optionToInclude === "always") {
-                        $scope.edgeTypeOptions.push({
-                            label: $scope.strings.get('workflow_maker.ALWAYS'),
-                            value: 'always'
-                        });
-                    } else if (optionToInclude === "success") {
-                        $scope.edgeTypeOptions.push({
-                            label: $scope.strings.get('workflow_maker.ON_SUCCESS'),
-                            value: 'success'
-                        });
-                    } else if (optionToInclude === "failure") {
-                        $scope.edgeTypeOptions.push({
-                            label: $scope.strings.get('workflow_maker.ON_FAILURE'),
-                            value: 'failure'
-                        });
-                    }
                 });
-            }
 
-            CreateSelect2({
-                element: '#workflow_node_edge',
-                multiple: false
-            });
-        };
-
-        let checkCredentialsForRequiredPasswords = () => {
-            let credentialRequiresPassword = false;
-            $scope.promptData.prompts.credentials.value.forEach((credential) => {
-                if ((credential.passwords_needed &&
-                    credential.passwords_needed.length > 0) ||
-                    (_.has(credential, 'inputs.vault_password') &&
-                    credential.inputs.vault_password === "ASK")
-                ) {
-                    credentialRequiresPassword = true;
-                }
-            });
-            $scope.credentialRequiresPassword = credentialRequiresPassword;
-        };
-
-        let watchForPromptChanges = () => {
-            let promptDataToWatch = [
-                'promptData.prompts.inventory.value',
-                'promptData.prompts.verbosity.value',
-                'missingSurveyValue'
-            ];
-
-            promptWatcher = $scope.$watchGroup(promptDataToWatch, function() {
-                let missingPromptValue = false;
-                if ($scope.missingSurveyValue) {
-                    missingPromptValue = true;
-                } else if (!$scope.promptData.prompts.inventory.value || !$scope.promptData.prompts.inventory.value.id) {
-                    missingPromptValue = true;
-                }
-                $scope.promptModalMissingReqFields = missingPromptValue;
-            });
-
-            if ($scope.promptData.launchConf.ask_credential_on_launch && $scope.credentialRequiresPassword) {
-                credentialsWatcher = $scope.$watch('promptData.prompts.credentials', () => {
-                    checkCredentialsForRequiredPasswords();
+                let deletePromises = deletedNodeIds.map((nodeId) => {
+                    return TemplatesService.deleteWorkflowJobTemplateNode(nodeId);
                 });
-            }
-        };
 
-        $scope.closeWorkflowMaker = function() {
-            // Revert the data to the master which was created when the dialog was opened
-            $scope.treeData.data = angular.copy($scope.treeDataMaster);
-            $scope.closeDialog();
-        };
+                $q.all(addPromises.concat(editPromises, deletePromises))
+                    .then(() => {
+                        $q.all(approvalTemplatePromises)
+                            .then(() => {
+                                let disassociatePromises = [];
+                                let linkMap = {};
 
-        $scope.saveWorkflowMaker = function() {
+                                // Build a link map for easy access
+                                $scope.graphState.arrayOfLinksForChart.forEach(link => {
+                                    // link.source.id of 1 is our artificial start node
+                                    if (link.source.id !== 1) {
+                                        const sourceNodeId = nodeRef[link.source.id].originalNodeObject.id;
+                                        const targetNodeId = nodeRef[link.target.id].originalNodeObject.id;
+                                        if (!linkMap[sourceNodeId]) {
+                                            linkMap[sourceNodeId] = {};
+                                        }
 
-            $scope.totalIteratedNodes = 0;
+                                        linkMap[sourceNodeId][targetNodeId] = link.edgeType;
+                                    }
+                                });
 
-            if ($scope.treeData && $scope.treeData.data && $scope.treeData.data.children && $scope.treeData.data.children.length > 0) {
-                let completionCallback = function() {
+                                Object.keys(nodeRef).map((workflowNodeId) => {
+                                    let nodeId = nodeRef[workflowNodeId].originalNodeObject.id;
+                                    if (nodeRef[workflowNodeId].originalNodeObject.success_nodes) {
+                                        nodeRef[workflowNodeId].originalNodeObject.success_nodes.forEach((successNodeId) => {
+                                            if (
+                                                !deletedNodeIds.includes(successNodeId) &&
+                                                (!linkMap[nodeId] ||
+                                                !linkMap[nodeId][successNodeId] ||
+                                                linkMap[nodeId][successNodeId] !== "success")
+                                            ) {
+                                                disassociatePromises.push(
+                                                    TemplatesService.disassociateWorkflowNode({
+                                                        parentId: nodeId,
+                                                        nodeId: successNodeId,
+                                                        edge: "success"
+                                                    })
+                                                );
+                                            }
+                                        });
+                                    }
+                                    if (nodeRef[workflowNodeId].originalNodeObject.failure_nodes) {
+                                        nodeRef[workflowNodeId].originalNodeObject.failure_nodes.forEach((failureNodeId) => {
+                                            if (
+                                                !deletedNodeIds.includes(failureNodeId) &&
+                                                (!linkMap[nodeId] ||
+                                                !linkMap[nodeId][failureNodeId] ||
+                                                linkMap[nodeId][failureNodeId] !== "failure")
+                                            ) {
+                                                disassociatePromises.push(
+                                                    TemplatesService.disassociateWorkflowNode({
+                                                        parentId: nodeId,
+                                                        nodeId: failureNodeId,
+                                                        edge: "failure"
+                                                    })
+                                                );
+                                            }
+                                        });
+                                    }
+                                    if (nodeRef[workflowNodeId].originalNodeObject.always_nodes) {
+                                        nodeRef[workflowNodeId].originalNodeObject.always_nodes.forEach((alwaysNodeId) => {
+                                            if (
+                                                !deletedNodeIds.includes(alwaysNodeId) &&
+                                                (!linkMap[nodeId] ||
+                                                !linkMap[nodeId][alwaysNodeId] ||
+                                                linkMap[nodeId][alwaysNodeId] !== "always")
+                                            ) {
+                                                disassociatePromises.push(
+                                                    TemplatesService.disassociateWorkflowNode({
+                                                        parentId: nodeId,
+                                                        nodeId: alwaysNodeId,
+                                                        edge: "always"
+                                                    })
+                                                );
+                                            }
+                                        });
+                                    }
+                                });
 
-                    let disassociatePromises = disassociateRequests.map(function(request) {
-                        return TemplatesService.disassociateWorkflowNode({
-                            parentId: request.parentId,
-                            nodeId: request.nodeId,
-                            edge: request.edge
-                        });
-                    });
+                                $q.all(disassociatePromises)
+                                    .then(() => {
+                                        let associatePromises = [];
+                                        Object.keys(linkMap).map((sourceNodeId) => {
+                                            Object.keys(linkMap[sourceNodeId]).map((targetNodeId) => {
+                                                const sourceChartNodeId = nodeIdToChartNodeIdMapping[sourceNodeId];
+                                                const targetChartNodeId = nodeIdToChartNodeIdMapping[targetNodeId];
+                                                switch(linkMap[sourceNodeId][targetNodeId]) {
+                                                    case "success":
+                                                        if (
+                                                            !nodeRef[sourceChartNodeId].originalNodeObject.success_nodes ||
+                                                            !nodeRef[sourceChartNodeId].originalNodeObject.success_nodes.includes(nodeRef[targetChartNodeId].originalNodeObject.id)
+                                                        ) {
+                                                            associatePromises.push(
+                                                                TemplatesService.associateWorkflowNode({
+                                                                    parentId: parseInt(sourceNodeId),
+                                                                    nodeId: parseInt(targetNodeId),
+                                                                    edge: "success"
+                                                                })
+                                                            );
+                                                        }
+                                                        break;
+                                                    case "failure":
+                                                        if (
+                                                            !nodeRef[sourceChartNodeId].originalNodeObject.failure_nodes ||
+                                                            !nodeRef[sourceChartNodeId].originalNodeObject.failure_nodes.includes(nodeRef[targetChartNodeId].originalNodeObject.id)
+                                                        ) {
+                                                            associatePromises.push(
+                                                                TemplatesService.associateWorkflowNode({
+                                                                    parentId: parseInt(sourceNodeId),
+                                                                    nodeId: parseInt(targetNodeId),
+                                                                    edge: "failure"
+                                                                })
+                                                            );
+                                                        }
+                                                        break;
+                                                    case "always":
+                                                        if (
+                                                            !nodeRef[sourceChartNodeId].originalNodeObject.always_nodes ||
+                                                            !nodeRef[sourceChartNodeId].originalNodeObject.always_nodes.includes(nodeRef[targetChartNodeId].originalNodeObject.id)
+                                                        ) {
+                                                            associatePromises.push(
+                                                                TemplatesService.associateWorkflowNode({
+                                                                    parentId: parseInt(sourceNodeId),
+                                                                    nodeId: parseInt(targetNodeId),
+                                                                    edge: "always"
+                                                                })
+                                                            );
+                                                        }
+                                                        break;
+                                                }
+                                            });
+                                        });
 
-                    let editNodePromises = editRequests.map(function(request) {
-                        return TemplatesService.editWorkflowNode({
-                            id: request.id,
-                            data: request.data
-                        });
-                    });
+                                        let credentialPromises = credentialRequests.map((request) => {
+                                            return TemplatesService.postWorkflowNodeCredential({
+                                                id: request.id,
+                                                data: request.data
+                                            });
+                                        });
 
-                    let deletePromises = $scope.treeData.data.deletedNodes.map(function(nodeId) {
-                        return TemplatesService.deleteWorkflowJobTemplateNode(nodeId);
-                    });
-
-                    $q.all(disassociatePromises.concat(editNodePromises, deletePromises))
-                    .then(function() {
-
-                        let credentialPromises = credentialRequests.map(function(request) {
-                            return TemplatesService.postWorkflowNodeCredential({
-                                id: request.id,
-                                data: request.data
+                                        return $q.all(associatePromises.concat(credentialPromises))
+                                            .then(() => {
+                                                Wait('stop');
+                                                $scope.workflowChangesUnsaved = false;
+                                                $scope.workflowChangesStarted = false;
+                                                $scope.closeDialog();
+                                            }).catch(({ data, status }) => {
+                                                Wait('stop');
+                                                ProcessErrors($scope, data, status, null, {
+                                                    hdr: $scope.strings.get('error.HEADER')
+                                                });
+                                            });
+                                    }).catch(({
+                                        data,
+                                        status
+                                    }) => {
+                                        Wait('stop');
+                                        ProcessErrors($scope, data, status, null, {
+                                            hdr: $scope.strings.get('error.HEADER')
+                                        });
+                                    });
                             });
+                    }).catch(({ data, status }) => {
+                        Wait('stop');
+                        ProcessErrors($scope, data, status, null, {
+                            hdr: $scope.strings.get('error.HEADER')
                         });
-
-                        let associatePromises = associateRequests.map(function(request) {
-                            return TemplatesService.associateWorkflowNode({
-                                parentId: request.parentId,
-                                nodeId: request.nodeId,
-                                edge: request.edge
-                            });
-                        });
-
-                        $q.all(associatePromises.concat(credentialPromises))
-                        .then(function() {
-                            $scope.closeDialog();
-                        }).catch(({data, status}) => {
-                            ProcessErrors($scope, data, status, null, {});
-                        });
-                    }).catch(({data, status}) => {
-                        ProcessErrors($scope, data, status, null, {});
                     });
-                };
-
-                _.forEach($scope.treeData.data.children, function(child) {
-                    recursiveNodeUpdates({
-                        node: child
-                    }, completionCallback);
-                });
             } else {
 
-                let deletePromises = $scope.treeData.data.deletedNodes.map(function(nodeId) {
+                let deletePromises = deletedNodeIds.map((nodeId) => {
                     return TemplatesService.deleteWorkflowJobTemplateNode(nodeId);
                 });
 
                 $q.all(deletePromises)
-                .then(function() {
-                    $scope.closeDialog();
-                });
+                    .then(() => {
+                        Wait('stop');
+                        $scope.workflowChangesUnsaved = false;
+                        $scope.workflowChangesStarted = false;
+                        $scope.closeDialog();
+                        $state.transitionTo('templates');
+                    }).catch(({ data, status }) => {
+                        Wait('stop');
+                        ProcessErrors($scope, data, status, null, {
+                            hdr: $scope.strings.get('error.HEADER')
+                        });
+                    });
             }
         };
 
         /* ADD NODE FUNCTIONS */
 
-        $scope.startAddNode = function(parent, betweenTwoNodes) {
-
-            if ($scope.placeholderNode || $scope.nodeBeingEdited) {
+        $scope.startAddNodeWithoutChild = (parent) => {
+            $scope.workflowChangesStarted = true;
+            if ($scope.nodeConfig) {
                 $scope.cancelNodeForm();
             }
 
-            $scope.workflowMakerFormConfig.nodeMode = "add";
-            $scope.addParent = parent;
-            $scope.betweenTwoNodes = betweenTwoNodes;
+            if ($scope.linkConfig) {
+                $scope.cancelLinkForm();
+            }
 
-            $scope.placeholderNode = WorkflowService.addPlaceholderNode({
-                parent: parent,
-                betweenTwoNodes: betweenTwoNodes,
-                tree: $scope.treeData.data,
-                id: $scope.treeData.nextIndex
+            $scope.graphState.arrayOfNodesForChart.push({
+                id: workflowMakerNodeIdCounter,
+                unifiedJobTemplate: null
             });
 
-            $scope.treeData.nextIndex++;
+            $scope.graphState.nodeBeingAdded = workflowMakerNodeIdCounter;
 
-            let siblingConnectionTypes = WorkflowService.getSiblingConnectionTypes({
-                tree: $scope.treeData.data,
-                parentId: betweenTwoNodes ? parent.source.id : parent.id,
-                childId: $scope.placeholderNode.id
+            $scope.graphState.arrayOfLinksForChart.push({
+                source: {
+                    id: parent.id,
+                    unifiedJobTemplate: parent.unifiedJobTemplate
+                },
+                target: {id: workflowMakerNodeIdCounter},
+                edgeType: "placeholder"
             });
 
-            // Set the default to success
-            let edgeType = {label: $scope.strings.get('workflow_maker.ON_SUCCESS'), value: "success"};
+            $scope.nodeConfig = {
+                mode: "add",
+                nodeId: workflowMakerNodeIdCounter,
+                newNodeIsRoot: parent.id === 1
+            };
 
-            if (parent && ((betweenTwoNodes && parent.source.isStartNode) || (!betweenTwoNodes && parent.isStartNode))) {
-                // We don't want to give the user the option to select
-                // a type as this node will always be executed
-                updateEdgeDropdownOptions(["always"]);
-                edgeType = {label: $scope.strings.get('workflow_maker.ALWAYS'), value: "always"};
-            } else {
-                if (_.includes(siblingConnectionTypes, "success") || _.includes(siblingConnectionTypes, "failure")) {
-                    updateEdgeDropdownOptions(["success", "failure"]);
-                    edgeType = {label: $scope.strings.get('workflow_maker.ON_SUCCESS'), value: "success"};
-                } else if (_.includes(siblingConnectionTypes, "always")) {
-                    updateEdgeDropdownOptions(["always"]);
-                    edgeType = {label: $scope.strings.get('workflow_maker.ALWAYS'), value: "always"};
-                } else {
-                    updateEdgeDropdownOptions();
-                }
-            }
-
-            // Reset the edgeConflict flag
-            resetEdgeConflict();
-
-            $scope.edgeType = edgeType;
-            $scope.$broadcast("refreshWorkflowChart");
-
-        };
-
-        $scope.confirmNodeForm = function() {
-            if ($scope.workflowMakerFormConfig.nodeMode === "add") {
-                if ($scope.selectedTemplate && $scope.edgeType && $scope.edgeType.value) {
-
-                    $scope.placeholderNode.unifiedJobTemplate = $scope.selectedTemplate;
-                    $scope.placeholderNode.edgeType = $scope.edgeType.value;
-                    if ($scope.placeholderNode.unifiedJobTemplate.type === 'job_template') {
-                        $scope.placeholderNode.promptData = _.cloneDeep($scope.promptData);
-                    }
-                    $scope.placeholderNode.canEdit = true;
-
-                    delete $scope.placeholderNode.placeholder;
-
-                    resetNodeForm();
-
-                    // Increment the total node counter
-                    $scope.treeData.data.totalNodes++;
-
-                }
-            } else if ($scope.workflowMakerFormConfig.nodeMode === "edit") {
-                if ($scope.selectedTemplate && $scope.edgeType && $scope.edgeType.value) {
-                    $scope.nodeBeingEdited.unifiedJobTemplate = $scope.selectedTemplate;
-                    $scope.nodeBeingEdited.edgeType = $scope.edgeType.value;
-
-                    if ($scope.nodeBeingEdited.unifiedJobTemplate.type === 'job_template') {
-                        $scope.nodeBeingEdited.promptData = _.cloneDeep($scope.promptData);
-                    }
-
-                    $scope.nodeBeingEdited.isActiveEdit = false;
-
-                    $scope.nodeBeingEdited.edited = true;
-
-                    resetNodeForm();
-                }
-            }
-
-            if (promptWatcher) {
-                promptWatcher();
-            }
-
-            if (surveyQuestionWatcher) {
-                surveyQuestionWatcher();
-            }
-
-            if (credentialsWatcher) {
-                credentialsWatcher();
-            }
-
-            $scope.promptData = null;
-
-            // Reset the edgeConflict flag
-            resetEdgeConflict();
+            workflowMakerNodeIdCounter++;
 
             $scope.$broadcast("refreshWorkflowChart");
+
+            $scope.formState.showNodeForm = true;
         };
 
-        $scope.cancelNodeForm = function() {
-            if ($scope.workflowMakerFormConfig.nodeMode === "add") {
-                // Remove the placeholder node from the tree
-                WorkflowService.removeNodeFromTree({
-                    tree: $scope.treeData.data,
-                    nodeToBeDeleted: $scope.placeholderNode
+        $scope.startAddNodeWithChild = (link) => {
+            $scope.workflowChangesStarted = true;
+            if ($scope.nodeConfig) {
+                $scope.cancelNodeForm();
+            }
+
+            if ($scope.linkConfig) {
+                $scope.cancelLinkForm();
+            }
+
+            $scope.graphState.arrayOfNodesForChart.push({
+                id: workflowMakerNodeIdCounter,
+                unifiedJobTemplate: null
+            });
+
+            $scope.graphState.nodeBeingAdded = workflowMakerNodeIdCounter;
+
+            $scope.graphState.arrayOfLinksForChart.push({
+                source: {
+                    id: link.source.id,
+                    unifiedJobTemplate: link.source.unifiedJobTemplate
+                },
+                target: {id: workflowMakerNodeIdCounter},
+                edgeType: "placeholder"
+            });
+
+            $scope.nodeConfig = {
+                mode: "add",
+                nodeId: workflowMakerNodeIdCounter,
+                newNodeIsRoot: link.source.id === 1
+            };
+
+            // Search for the link that used to exist between source and target and shift it to
+            // go from our new node to the target
+            $scope.graphState.arrayOfLinksForChart.forEach((linkToCompare) => {
+                if (linkToCompare.source.id === link.source.id && linkToCompare.target.id === link.target.id) {
+                    linkToCompare.source = {id: workflowMakerNodeIdCounter};
+                }
+            });
+
+            workflowMakerNodeIdCounter++;
+
+            $scope.$broadcast("refreshWorkflowChart");
+
+            $scope.formState.showNodeForm = true;
+        };
+
+        $scope.confirmNodeForm = (nodeFormData) => {
+            const { edgeType, selectedTemplate, promptData } = nodeFormData;
+            const isPauseNode = selectedTemplate.type === "workflow_approval" ||
+                selectedTemplate.unified_job_type === "workflow_approval";
+            // edgeType, selectedTemplate, promptData
+            // can determine pause node by looking at the type (?) or maybe unified_job_type
+            $scope.workflowChangesUnsaved = true;
+            const nodeId = $scope.nodeConfig.nodeId;
+            if ($scope.nodeConfig.mode === "add") {
+                if (edgeType && edgeType.value && selectedTemplate) {
+                    if (isPauseNode) {
+                        nodeRef[$scope.nodeConfig.nodeId] = {
+                            unifiedJobTemplate: {
+                                name: selectedTemplate.name,
+                                description: selectedTemplate.description,
+                                timeout: selectedTemplate.timeout,
+                                unified_job_type: "workflow_approval"
+                            },
+                            isNew: true
+                        };
+                    } else {
+                        nodeRef[$scope.nodeConfig.nodeId] = {
+                            fullUnifiedJobTemplateObject: selectedTemplate,
+                            promptData,
+                            isNew: true
+                        };
+                    }
+                    $scope.graphState.nodeBeingAdded = null;
+
+                    $scope.graphState.arrayOfLinksForChart.map( (link) => {
+                        if (link.target.id === nodeId) {
+                            link.edgeType = edgeType.value;
+                            link.target.unifiedJobTemplate = selectedTemplate;
+                        }
+                    });
+                }
+            } else if ($scope.nodeConfig.mode === "edit") {
+                if (selectedTemplate) {
+                    if (isPauseNode) {
+                        // If it's a _new_ pause node then we'll want to create the new ujt
+                        // If it's an existing pause node then we'll want to update the ujt
+                        nodeRef[$scope.nodeConfig.nodeId].unifiedJobTemplate = {
+                            name: selectedTemplate.name,
+                            description: selectedTemplate.description,
+                            timeout: selectedTemplate.timeout,
+                            unified_job_type: "workflow_approval"
+                        };
+                        nodeRef[$scope.nodeConfig.nodeId].isEdited = true;
+                    } else {
+                        nodeRef[$scope.nodeConfig.nodeId].fullUnifiedJobTemplateObject = selectedTemplate;
+                        nodeRef[$scope.nodeConfig.nodeId].unifiedJobTemplate = selectedTemplate;
+                        nodeRef[$scope.nodeConfig.nodeId].promptData = _.cloneDeep(promptData);
+                        nodeRef[$scope.nodeConfig.nodeId].isEdited = true;
+                    }
+
+                    $scope.graphState.nodeBeingEdited = null;
+
+                    $scope.graphState.arrayOfLinksForChart.map( (link) => {
+                        if (link.target.id === nodeId) {
+                            link.target.unifiedJobTemplate = selectedTemplate;
+                        }
+                        if (link.source.id === nodeId) {
+                            link.source.unifiedJobTemplate = selectedTemplate;
+                        }
+                    });
+                }
+            }
+            nodeRef[$scope.nodeConfig.nodeId].all_parents_must_converge = nodeFormData.all_parents_must_converge;
+
+            $scope.graphState.arrayOfNodesForChart.map( (node) => {
+                if (node.id === nodeId) {
+                    node.all_parents_must_converge = nodeFormData.all_parents_must_converge;
+                    if (isPauseNode) {
+                        node.unifiedJobTemplate = {
+                            unified_job_type: 'workflow_approval',
+                            name: selectedTemplate.name,
+                            description: selectedTemplate.description,
+                            timeout: selectedTemplate.timeout,
+                        };
+                    } else {
+                        node.unifiedJobTemplate = selectedTemplate;
+                    }
+                }
+            });
+
+            $scope.formState.showNodeForm = false;
+            $scope.nodeConfig = null;
+
+            $scope.$broadcast("refreshWorkflowChart");
+        };
+
+        $scope.cancelNodeForm = () => {
+            $scope.workflowChangesStarted = false;
+            const nodeId = $scope.nodeConfig.nodeId;
+            if ($scope.nodeConfig.mode === "add") {
+                // Remove the placeholder node from the array
+                for( let i = $scope.graphState.arrayOfNodesForChart.length; i--; ){
+                    if ($scope.graphState.arrayOfNodesForChart[i].id === nodeId) {
+                        $scope.graphState.arrayOfNodesForChart.splice(i, 1);
+                        i = 0;
+                    }
+                }
+
+                // Update the links
+                let parents = [];
+                let children = [];
+
+                // Remove any links that reference this node
+                for( let i = $scope.graphState.arrayOfLinksForChart.length; i--; ){
+                    const link = $scope.graphState.arrayOfLinksForChart[i];
+
+                    if (link.source.id === nodeId || link.target.id === nodeId) {
+                        if (link.source.id === nodeId) {
+                            children.push({id: link.target.id, edgeType: link.edgeType});
+                        } else if (link.target.id === nodeId) {
+                            parents.push(link.source.id);
+                        }
+                        $scope.graphState.arrayOfLinksForChart.splice(i, 1);
+                    }
+                }
+
+                // Add the new links
+                parents.forEach((parentId) => {
+                    children.forEach((child) => {
+                        let source = {
+                            id: parentId
+                        };
+                        if (parentId === 1) {
+                            child.edgeType = "always";
+                        }
+                        $scope.graphState.arrayOfLinksForChart.push({
+                            source,
+                            target: {id: child.id},
+                            edgeType: child.edgeType
+                        });
+                    });
                 });
-            } else if ($scope.workflowMakerFormConfig.nodeMode === "edit") {
-                $scope.nodeBeingEdited.isActiveEdit = false;
+
+            } else if ($scope.nodeConfig.mode === "edit") {
+                $scope.graphState.nodeBeingEdited = null;
             }
-
-            if (promptWatcher) {
-                promptWatcher();
-            }
-
-            if (surveyQuestionWatcher) {
-                surveyQuestionWatcher();
-            }
-
-            if (credentialsWatcher) {
-                credentialsWatcher();
-            }
-
-            $scope.promptData = null;
-            $scope.selectedTemplateInvalid = false;
-            $scope.showPromptButton = false;
-
-            // Reset the edgeConflict flag
-            resetEdgeConflict();
-
-            // Reset the form
-            resetNodeForm();
-
+            $scope.formState.showNodeForm = false;
+            $scope.nodeConfig = null;
             $scope.$broadcast("refreshWorkflowChart");
         };
 
         /* EDIT NODE FUNCTIONS */
 
-        $scope.startEditNode = function(nodeToEdit) {
-
-            if (!$scope.nodeBeingEdited || ($scope.nodeBeingEdited && $scope.nodeBeingEdited.id !== nodeToEdit.id)) {
-                if ($scope.placeholderNode || $scope.nodeBeingEdited) {
-                    $scope.cancelNodeForm();
-
-                    // Refresh this object as the parent has changed
-                    nodeToEdit = WorkflowService.searchTree({
-                        element: $scope.treeData.data,
-                        matchingId: nodeToEdit.id
-                    });
-                }
-
-                $scope.workflowMakerFormConfig.nodeMode = "edit";
-
-                let parent = WorkflowService.searchTree({
-                    element: $scope.treeData.data,
-                    matchingId: nodeToEdit.parent.id
-                });
-
-                $scope.nodeBeingEdited = WorkflowService.searchTree({
-                    element: parent,
-                    matchingId: nodeToEdit.id
-                });
-
-                $scope.nodeBeingEdited.isActiveEdit = true;
-
-                let finishConfiguringEdit = function() {
-
-                    let jobTemplate = new JobTemplate();
-
-                    if (!_.isEmpty($scope.nodeBeingEdited.promptData)) {
-                        $scope.promptData = _.cloneDeep($scope.nodeBeingEdited.promptData);
-                        const launchConf = $scope.promptData.launchConf;
-
-                        if (!launchConf.survey_enabled &&
-                            !launchConf.ask_inventory_on_launch &&
-                            !launchConf.ask_credential_on_launch &&
-                            !launchConf.ask_verbosity_on_launch &&
-                            !launchConf.ask_job_type_on_launch &&
-                            !launchConf.ask_limit_on_launch &&
-                            !launchConf.ask_tags_on_launch &&
-                            !launchConf.ask_skip_tags_on_launch &&
-                            !launchConf.ask_diff_mode_on_launch &&
-                            !launchConf.credential_needed_to_start &&
-                            !launchConf.ask_variables_on_launch &&
-                            launchConf.variables_needed_to_start.length === 0) {
-                                $scope.showPromptButton = false;
-                                $scope.promptModalMissingReqFields = false;
-                        } else {
-                            $scope.showPromptButton = true;
-
-                            if (launchConf.ask_inventory_on_launch && !_.has(launchConf, 'defaults.inventory') && !_.has($scope, 'nodeBeingEdited.originalNodeObj.summary_fields.inventory')) {
-                                $scope.promptModalMissingReqFields = true;
-                            } else {
-                                $scope.promptModalMissingReqFields = false;
-                            }
-                        }
-                    } else if (
-                        _.get($scope, 'nodeBeingEdited.unifiedJobTemplate.unified_job_type') === 'job_template' ||
-                        _.get($scope, 'nodeBeingEdited.unifiedJobTemplate.type') === 'job_template'
-                    ) {
-                        let promises = [jobTemplate.optionsLaunch($scope.nodeBeingEdited.unifiedJobTemplate.id), jobTemplate.getLaunch($scope.nodeBeingEdited.unifiedJobTemplate.id)];
-
-                        if (_.has($scope, 'nodeBeingEdited.originalNodeObj.related.credentials')) {
-                            Rest.setUrl($scope.nodeBeingEdited.originalNodeObj.related.credentials);
-                            promises.push(Rest.get());
-                        }
-
-                        $q.all(promises)
-                            .then((responses) => {
-                                let launchOptions = responses[0].data,
-                                    launchConf = responses[1].data,
-                                    workflowNodeCredentials = responses[2] ? responses[2].data.results : [];
-
-                                let prompts = PromptService.processPromptValues({
-                                    launchConf: responses[1].data,
-                                    launchOptions: responses[0].data,
-                                    currentValues: $scope.nodeBeingEdited.originalNodeObj
-                                });
-
-                                let defaultCredsWithoutOverrides = [];
-
-                                prompts.credentials.previousOverrides = _.cloneDeep(workflowNodeCredentials);
-
-                                const credentialHasScheduleOverride = (templateDefaultCred) => {
-                                    let credentialHasOverride = false;
-                                    workflowNodeCredentials.forEach((scheduleCred) => {
-                                        if (templateDefaultCred.credential_type === scheduleCred.credential_type) {
-                                            if (
-                                                (!templateDefaultCred.vault_id && !scheduleCred.inputs.vault_id) ||
-                                                (templateDefaultCred.vault_id && scheduleCred.inputs.vault_id && templateDefaultCred.vault_id === scheduleCred.inputs.vault_id)
-                                            ) {
-                                                credentialHasOverride = true;
-                                            }
-                                        }
-                                    });
-
-                                    return credentialHasOverride;
-                                };
-
-                                if (_.has(launchConf, 'defaults.credentials')) {
-                                    launchConf.defaults.credentials.forEach((defaultCred) => {
-                                        if (!credentialHasScheduleOverride(defaultCred)) {
-                                            defaultCredsWithoutOverrides.push(defaultCred);
-                                        }
-                                    });
-                                }
-
-                                prompts.credentials.value = workflowNodeCredentials.concat(defaultCredsWithoutOverrides);
-
-                                if ((!$scope.nodeBeingEdited.unifiedJobTemplate.inventory && !launchConf.ask_inventory_on_launch) || !$scope.nodeBeingEdited.unifiedJobTemplate.project) {
-                                    $scope.selectedTemplateInvalid = true;
-                                } else {
-                                    $scope.selectedTemplateInvalid = false;
-                                }
-
-                                let credentialRequiresPassword = false;
-
-                                prompts.credentials.value.forEach((credential) => {
-                                    if(credential.inputs) {
-                                        if ((credential.inputs.password && credential.inputs.password === "ASK") ||
-                                            (credential.inputs.become_password && credential.inputs.become_password === "ASK") ||
-                                            (credential.inputs.ssh_key_unlock && credential.inputs.ssh_key_unlock === "ASK") ||
-                                            (credential.inputs.vault_password && credential.inputs.vault_password === "ASK")
-                                        ) {
-                                            credentialRequiresPassword = true;
-                                        }
-                                    } else if (credential.passwords_needed && credential.passwords_needed.length > 0) {
-                                        credentialRequiresPassword = true;
-                                    }
-                                });
-
-                                $scope.credentialRequiresPassword = credentialRequiresPassword;
-
-                                if (!launchConf.survey_enabled &&
-                                    !launchConf.ask_inventory_on_launch &&
-                                    !launchConf.ask_credential_on_launch &&
-                                    !launchConf.ask_verbosity_on_launch &&
-                                    !launchConf.ask_job_type_on_launch &&
-                                    !launchConf.ask_limit_on_launch &&
-                                    !launchConf.ask_tags_on_launch &&
-                                    !launchConf.ask_skip_tags_on_launch &&
-                                    !launchConf.ask_diff_mode_on_launch &&
-                                    !launchConf.credential_needed_to_start &&
-                                    !launchConf.ask_variables_on_launch &&
-                                    launchConf.variables_needed_to_start.length === 0) {
-                                        $scope.showPromptButton = false;
-                                        $scope.promptModalMissingReqFields = false;
-                                } else {
-                                    $scope.showPromptButton = true;
-
-                                    if (launchConf.ask_inventory_on_launch && !_.has(launchConf, 'defaults.inventory') && !_.has($scope, 'nodeBeingEdited.originalNodeObj.summary_fields.inventory')) {
-                                        $scope.promptModalMissingReqFields = true;
-                                    } else {
-                                        $scope.promptModalMissingReqFields = false;
-                                    }
-
-                                    if (responses[1].data.survey_enabled) {
-                                        // go out and get the survey questions
-                                        jobTemplate.getSurveyQuestions($scope.nodeBeingEdited.unifiedJobTemplate.id)
-                                            .then((surveyQuestionRes) => {
-
-                                                let processed = PromptService.processSurveyQuestions({
-                                                    surveyQuestions: surveyQuestionRes.data.spec,
-                                                    extra_data: _.cloneDeep($scope.nodeBeingEdited.originalNodeObj.extra_data)
-                                                });
-
-                                                $scope.missingSurveyValue = processed.missingSurveyValue;
-
-                                                $scope.extraVars = (processed.extra_data === '' || _.isEmpty(processed.extra_data)) ? '---' : '---\n' + jsyaml.safeDump(processed.extra_data);
-
-                                                $scope.nodeBeingEdited.promptData = $scope.promptData = {
-                                                    launchConf: launchConf,
-                                                    launchOptions: launchOptions,
-                                                    prompts: prompts,
-                                                    surveyQuestions: surveyQuestionRes.data.spec,
-                                                    template: $scope.nodeBeingEdited.unifiedJobTemplate.id
-                                                };
-
-                                                surveyQuestionWatcher = $scope.$watch('promptData.surveyQuestions', () => {
-                                                    let missingSurveyValue = false;
-                                                    _.each($scope.promptData.surveyQuestions, (question) => {
-                                                        if (question.required && (Empty(question.model) || question.model === [])) {
-                                                            missingSurveyValue = true;
-                                                        }
-                                                    });
-                                                    $scope.missingSurveyValue = missingSurveyValue;
-                                                }, true);
-
-                                                checkCredentialsForRequiredPasswords();
-
-                                                watchForPromptChanges();
-                                            });
-                                    } else {
-                                        $scope.nodeBeingEdited.promptData = $scope.promptData = {
-                                            launchConf: launchConf,
-                                            launchOptions: launchOptions,
-                                            prompts: prompts,
-                                            template: $scope.nodeBeingEdited.unifiedJobTemplate.id
-                                        };
-
-                                        checkCredentialsForRequiredPasswords();
-
-                                        watchForPromptChanges();
-                                    }
-                                }
-                        });
-                    }
-
-                    if (_.get($scope, 'nodeBeingEdited.unifiedJobTemplate')) {
-                        if (_.get($scope, 'nodeBeingEdited.unifiedJobTemplate.type') === "job_template") {
-                            $scope.workflowMakerFormConfig.activeTab = "jobs";
-                        }
-
-                        $scope.selectedTemplate = $scope.nodeBeingEdited.unifiedJobTemplate;
-
-                        if ($scope.selectedTemplate.unified_job_type) {
-                            switch ($scope.selectedTemplate.unified_job_type) {
-                                case "job":
-                                    $scope.workflowMakerFormConfig.activeTab = "jobs";
-                                    break;
-                                case "project_update":
-                                    $scope.workflowMakerFormConfig.activeTab = "project_sync";
-                                    break;
-                                case "inventory_update":
-                                    $scope.workflowMakerFormConfig.activeTab = "inventory_sync";
-                                    break;
-                            }
-                        } else if ($scope.selectedTemplate.type) {
-                            switch ($scope.selectedTemplate.type) {
-                                case "job_template":
-                                    $scope.workflowMakerFormConfig.activeTab = "jobs";
-                                    break;
-                                case "project":
-                                    $scope.workflowMakerFormConfig.activeTab = "project_sync";
-                                    break;
-                                case "inventory_source":
-                                    $scope.workflowMakerFormConfig.activeTab = "inventory_sync";
-                                    break;
-                            }
-                        }
-                    } else {
-                        $scope.workflowMakerFormConfig.activeTab = "jobs";
-                    }
-
-                    let siblingConnectionTypes = WorkflowService.getSiblingConnectionTypes({
-                         tree: $scope.treeData.data,
-                         parentId: parent.id,
-                         childId: nodeToEdit.id
-                     });
-
-                     let edgeDropdownOptions = null;
-
-                     switch($scope.nodeBeingEdited.edgeType) {
-                        case "always":
-                            $scope.edgeType = {label: i18n._("Always"), value: "always"};
-                            if (siblingConnectionTypes.length === 1 && _.includes(siblingConnectionTypes, "always") || $scope.nodeBeingEdited.isRoot) {
-                                edgeDropdownOptions = ["always"];
-                            }
-                            break;
-                        case "success":
-                            $scope.edgeType = {label: i18n._("On Success"), value: "success"};
-                            if (siblingConnectionTypes.length !== 0 && (!_.includes(siblingConnectionTypes, "always"))) {
-                                edgeDropdownOptions = ["success", "failure"];
-                            }
-                            break;
-                        case "failure":
-                            $scope.edgeType = {label: i18n._("On Failure"), value: "failure"};
-                            if (siblingConnectionTypes.length !== 0 && (!_.includes(siblingConnectionTypes, "always"))) {
-                                edgeDropdownOptions = ["success", "failure"];
-                            }
-                            break;
-                    }
-
-                    $timeout(updateEdgeDropdownOptions(edgeDropdownOptions));
-
-                    $scope.$broadcast("refreshWorkflowChart");
-                };
-
-                // Determine whether or not we need to go out and GET this nodes unified job template
-                // in order to determine whether or not prompt fields are needed
-
-                if (!$scope.nodeBeingEdited.isNew && !$scope.nodeBeingEdited.edited && $scope.nodeBeingEdited.unifiedJobTemplate && $scope.nodeBeingEdited.unifiedJobTemplate.unified_job_type && $scope.nodeBeingEdited.unifiedJobTemplate.unified_job_type === 'job') {
-                    // This is a node that we got back from the api with an incomplete
-                    // unified job template so we're going to pull down the whole object
-
-                    TemplatesService.getUnifiedJobTemplate($scope.nodeBeingEdited.unifiedJobTemplate.id)
-                        .then(function(data) {
-                            $scope.nodeBeingEdited.unifiedJobTemplate = _.clone(data.data.results[0]);
-                            finishConfiguringEdit();
-                        }, function(error) {
-                            ProcessErrors($scope, error.data, error.status, null, {
-                                hdr: 'Error!',
-                                msg: 'Failed to get unified job template. GET returned ' +
-                                    'status: ' + error.status
-                            });
-                        });
-                } else {
-                    finishConfiguringEdit();
-                }
-
+        $scope.startEditNode = (nodeToEdit) => {
+            $scope.workflowChangesStarted = true;
+            if ($scope.linkConfig) {
+                $scope.cancelLinkForm();
             }
 
+            if (!$scope.nodeConfig || ($scope.nodeConfig && $scope.nodeConfig.nodeId !== nodeToEdit.id)) {
+                if ($scope.nodeConfig) {
+                    $scope.cancelNodeForm();
+                }
+
+                $scope.nodeConfig = {
+                    mode: "edit",
+                    nodeId: nodeToEdit.id,
+                    node: nodeRef[nodeToEdit.id]
+                };
+
+                $scope.graphState.nodeBeingEdited = nodeToEdit.id;
+
+                $scope.formState.showNodeForm = true;
+            }
+
+            $scope.$broadcast("refreshWorkflowChart");
+        };
+
+        /* LINK FUNCTIONS */
+
+        $scope.startEditLink = (linkToEdit) => {
+            $scope.workflowChangesStarted = true;
+            const setupLinkEdit = () => {
+
+                // Determine whether or not this link can be removed
+                let numberOfParents = 0;
+                $scope.graphState.arrayOfLinksForChart.forEach((link) => {
+                    if (link.target.id === linkToEdit.target.id) {
+                        numberOfParents++;
+                    }
+                });
+
+                $scope.graphState.linkBeingEdited = {
+                    source: linkToEdit.source.id,
+                    target: linkToEdit.target.id
+                };
+
+                $scope.linkConfig = {
+                    mode: "edit",
+                    source: {
+                        id: linkToEdit.source.id,
+                        name: _.get(linkToEdit, 'source.unifiedJobTemplate.name') || ""
+                    },
+                    target: {
+                        id: linkToEdit.target.id,
+                        name: _.get(linkToEdit, 'target.unifiedJobTemplate.name') || ""
+                    },
+                    edgeType: linkToEdit.edgeType,
+                    canUnlink: numberOfParents > 1
+                };
+                $scope.formState.showLinkForm = true;
+
+                $scope.$broadcast("refreshWorkflowChart");
+            };
+
+            if ($scope.nodeConfig) {
+                $scope.cancelNodeForm();
+            }
+
+            if ($scope.linkConfig) {
+                if ($scope.linkConfig.source.id !== linkToEdit.source.id || $scope.linkConfig.target.id !== linkToEdit.target.id) {
+                    // User is going from editing one link to editing another
+                    if ($scope.linkConfig.mode === "add") {
+                        $scope.graphState.arrayOfLinksForChart.splice($scope.graphState.arrayOfLinksForChart.length-1, 1);
+                    }
+                    setupLinkEdit();
+                }
+            } else {
+                setupLinkEdit();
+            }
+
+        };
+
+        $scope.selectNodeForLinking = (node) => {
+            $scope.workflowChangesStarted = true;
+            if ($scope.nodeConfig) {
+                $scope.cancelNodeForm();
+            }
+            // User was add/editing a link and then hit the link icon
+            if ($scope.linkConfig && $scope.linkConfig.target) {
+                $scope.cancelLinkForm();
+            }
+            if ($scope.linkConfig) {
+                // This is the second node selected
+                $scope.linkConfig.target = {
+                    id: node.id,
+                    name: node.unifiedJobTemplate.name
+                };
+                $scope.linkConfig.edgeType = "success";
+
+                $scope.graphState.arrayOfNodesForChart.forEach((nodeToUpdate) => {
+                    nodeToUpdate.isInvalidLinkTarget = false;
+                });
+
+                $scope.graphState.arrayOfLinksForChart.push({
+                    source: {id: $scope.linkConfig.source.id},
+                    target: {id: node.id},
+                    edgeType: "placeholder"
+                });
+
+                $scope.graphState.linkBeingEdited = {
+                    source: {id: $scope.linkConfig.source.id},
+                    target: {id: node.id}
+                };
+
+                $scope.graphState.arrayOfLinksForChart.forEach((link, index) => {
+                    if (link.source.id === 1 && link.target.id === node.id) {
+                        $scope.graphState.arrayOfLinksForChart.splice(index, 1);
+                    }
+                });
+
+                $scope.graphState.isLinkMode = false;
+            } else {
+                // This is the first node selected
+                $scope.graphState.addLinkSource = node.id;
+                $scope.linkConfig = {
+                    mode: "add",
+                    source: {
+                        id: node.id,
+                        name: node.unifiedJobTemplate.name
+                    }
+                };
+
+                let parentMap = {};
+                let invalidLinkTargetIds = [];
+
+                // Find and mark any ancestors as disabled to prevent cycles
+                $scope.graphState.arrayOfLinksForChart.forEach((link) => {
+                    // id=1 is our artificial root node so we don't care about that
+                    if (link.source.id !== 1) {
+                        if (link.source.id === node.id) {
+                            // Disables direct children from the add link process
+                            invalidLinkTargetIds.push(link.target.id);
+                        }
+                        if (!parentMap[link.target.id]) {
+                            parentMap[link.target.id] = [];
+                        }
+                        parentMap[link.target.id].push(link.source.id);
+                    }
+                });
+
+                let getAncestors = (id) => {
+                    if (parentMap[id]) {
+                        parentMap[id].forEach((parentId) => {
+                            invalidLinkTargetIds.push(parentId);
+                            getAncestors(parentId);
+                        });
+                    }
+                };
+
+                getAncestors(node.id);
+
+                // Filter out the duplicates
+                invalidLinkTargetIds.filter((element, index, array) => index === array.indexOf(element)).forEach((ancestorId) => {
+                    $scope.graphState.arrayOfNodesForChart.forEach((node) => {
+                        if (node.id === ancestorId) {
+                            node.isInvalidLinkTarget = true;
+                        }
+                    });
+                });
+
+                $scope.graphState.isLinkMode = true;
+
+                $scope.formState.showLinkForm = true;
+            }
+
+            $scope.$broadcast("refreshWorkflowChart");
+        };
+
+        $scope.confirmLinkForm = (newEdgeType) => {
+            $scope.workflowChangesUnsaved = true;
+            $scope.graphState.arrayOfLinksForChart.forEach((link) => {
+                if (link.source.id === $scope.linkConfig.source.id && link.target.id === $scope.linkConfig.target.id) {
+                    link.edgeType = newEdgeType;
+                }
+            });
+
+            if ($scope.linkConfig.mode === "add") {
+                $scope.graphState.arrayOfNodesForChart.forEach((node) => {
+                    node.isInvalidLinkTarget = false;
+                });
+            }
+
+            $scope.graphState.linkBeingEdited = null;
+            $scope.graphState.addLinkSource = null;
+            $scope.formState.showLinkForm = false;
+            $scope.linkConfig = null;
+            $scope.$broadcast("refreshWorkflowChart");
+        };
+
+        $scope.unlink = () => {
+            $scope.workflowChangesUnsaved = true;
+            // Remove the link
+            for( let i = $scope.graphState.arrayOfLinksForChart.length; i--; ){
+                const link = $scope.graphState.arrayOfLinksForChart[i];
+
+                if (link.source.id === $scope.linkConfig.source.id && link.target.id === $scope.linkConfig.target.id) {
+                    $scope.graphState.arrayOfLinksForChart.splice(i, 1);
+                }
+            }
+
+            $scope.formState.showLinkForm = false;
+            $scope.linkConfig = null;
+            $scope.$broadcast("refreshWorkflowChart");
+        };
+
+        $scope.cancelLinkForm = () => {
+            $scope.workflowChangesStarted = false;
+            if ($scope.linkConfig.mode === "add" && $scope.linkConfig.target) {
+                $scope.graphState.arrayOfLinksForChart.splice($scope.graphState.arrayOfLinksForChart.length-1, 1);
+                let targetIsOrphaned = true;
+                $scope.graphState.arrayOfLinksForChart.forEach((link) => {
+                    if (link.target.id === $scope.linkConfig.target.id) {
+                        targetIsOrphaned = false;
+                    }
+                });
+                if (targetIsOrphaned) {
+                    // Link it to the start node
+                    $scope.graphState.arrayOfLinksForChart.push({
+                        source: {id: 1},
+                        target: {id: $scope.linkConfig.target.id},
+                        edgeType: "always"
+                    });
+                }
+            }
+            $scope.graphState.linkBeingEdited = null;
+            $scope.graphState.addLinkSource = null;
+            $scope.graphState.isLinkMode = false;
+            $scope.graphState.arrayOfNodesForChart.forEach((node) => {
+                node.isInvalidLinkTarget = false;
+            });
+            $scope.formState.showLinkForm = false;
+            $scope.linkConfig = null;
+            $scope.$broadcast("refreshWorkflowChart");
         };
 
         /* DELETE NODE FUNCTIONS */
 
-        function resetDeleteNode() {
-            $scope.nodeToBeDeleted = null;
-            $scope.deleteOverlayVisible = false;
-        }
-
-        $scope.startDeleteNode = function(nodeToDelete) {
+        $scope.startDeleteNode = (nodeToDelete) => {
+            $scope.workflowChangesStarted = true;
             $scope.nodeToBeDeleted = nodeToDelete;
             $scope.deleteOverlayVisible = true;
         };
 
-        $scope.cancelDeleteNode = function() {
-            resetDeleteNode();
+        $scope.cancelDeleteNode = () => {
+            $scope.workflowChangesStarted = false;
+            $scope.nodeToBeDeleted = null;
+            $scope.deleteOverlayVisible = false;
         };
 
-        $scope.confirmDeleteNode = function() {
+        $scope.confirmDeleteNode = () => {
+            $scope.workflowChangesUnsaved = true;
             if ($scope.nodeToBeDeleted) {
+                const nodeId = $scope.nodeToBeDeleted.id;
 
-                // TODO: turn this into a promise so that we can handle errors
+                if ($scope.linkConfig) {
+                    $scope.cancelLinkForm();
+                }
 
-                WorkflowService.removeNodeFromTree({
-                    tree: $scope.treeData.data,
-                    nodeToBeDeleted: $scope.nodeToBeDeleted
+                if ($scope.nodeConfig && $scope.nodeConfig.nodeId === nodeId) {
+                    $scope.cancelNodeForm();
+                }
+
+                // Remove the node from the array
+                for( let i = $scope.graphState.arrayOfNodesForChart.length; i--; ){
+                    if ($scope.graphState.arrayOfNodesForChart[i].id === nodeId) {
+                        $scope.graphState.arrayOfNodesForChart.splice(i, 1);
+                        i = 0;
+                    }
+                }
+
+                // Update the links
+                let parents = [];
+                let children = [];
+                let linkParentMapping = {};
+
+                // Remove any links that reference this node
+                for( let i = $scope.graphState.arrayOfLinksForChart.length; i--; ){
+                    const link = $scope.graphState.arrayOfLinksForChart[i];
+
+                    if (!linkParentMapping[link.target.id]) {
+                        linkParentMapping[link.target.id] = [];
+                    }
+
+                    linkParentMapping[link.target.id].push(link.source.id);
+
+                    if (link.source.id === nodeId || link.target.id === nodeId) {
+                        if (link.source.id === nodeId) {
+                            children.push({id: link.target.id, edgeType: link.edgeType});
+                        } else if (link.target.id === nodeId) {
+                            parents.push(link.source.id);
+                        }
+                        $scope.graphState.arrayOfLinksForChart.splice(i, 1);
+                    }
+                }
+
+                // Add the new links
+                parents.forEach((parentId) => {
+                    children.forEach((child) => {
+                        if (parentId === 1) {
+                            // We only want to create a link from the start node to this node if it
+                            // doesn't have any other parents
+                            if(linkParentMapping[child.id].length === 1) {
+                                $scope.graphState.arrayOfLinksForChart.push({
+                                    source: {id: parentId},
+                                    target: {id: child.id},
+                                    edgeType: "always"
+                                });
+                            }
+                        } else {
+                            // We don't want to add a link that already exists
+                            if (!linkParentMapping[child.id].includes(parentId)) {
+                                $scope.graphState.arrayOfLinksForChart.push({
+                                    source: {id: parentId},
+                                    target: {id: child.id},
+                                    edgeType: child.edgeType
+                                });
+                            }
+                        }
+
+                    });
                 });
 
-                if ($scope.nodeToBeDeleted.isNew !== true) {
-                    $scope.treeData.data.deletedNodes.push($scope.nodeToBeDeleted.nodeId);
+                if (nodeRef[$scope.nodeToBeDeleted.id].isNew !== true) {
+                    deletedNodeIds.push(nodeRef[$scope.nodeToBeDeleted.id].originalNodeObject.id);
                 }
 
-                if ($scope.nodeToBeDeleted.isActiveEdit) {
-                    resetNodeForm();
-                }
+                delete nodeRef[$scope.nodeToBeDeleted.id];
 
-                // Reset the edgeConflict flag
-                resetEdgeConflict();
+                $scope.deleteOverlayVisible = false;
 
-                resetDeleteNode();
+                $scope.nodeToBeDeleted = null;
+                $scope.deleteOverlayVisible = false;
 
                 $scope.$broadcast("refreshWorkflowChart");
-
-                if ($scope.placeholderNode) {
-                    let edgeType = {label: "On Success", value: "success"};
-                    if ($scope.placeholderNode.isRoot) {
-                        updateEdgeDropdownOptions(["always"]);
-                        edgeType = {label: "Always", value: "always"};
-                    } else {
-                        // we need to update the possible edges based on any new siblings
-                        let siblingConnectionTypes = WorkflowService.getSiblingConnectionTypes({
-                            tree: $scope.treeData.data,
-                            parentId: $scope.placeholderNode.parent.id,
-                            childId: $scope.placeholderNode.id
-                        });
-
-                        if (
-                            (_.includes(siblingConnectionTypes, "success") || _.includes(siblingConnectionTypes, "failure")) &&
-                            !_.includes(siblingConnectionTypes, "always")
-                        ) {
-                            updateEdgeDropdownOptions(["success", "failure"]);
-                        } else if (
-                            _.includes(siblingConnectionTypes, "always") &&
-                            !_.includes(siblingConnectionTypes, "success") &&
-                            !_.includes(siblingConnectionTypes, "failure")
-                        ) {
-                            updateEdgeDropdownOptions(["always"]);
-                            edgeType = {label: "Always", value: "always"};
-                        } else {
-                            updateEdgeDropdownOptions();
-                        }
-
-                    }
-                    $scope.edgeType = edgeType;
-                } else if ($scope.nodeBeingEdited) {
-                    let siblingConnectionTypes = WorkflowService.getSiblingConnectionTypes({
-                        tree: $scope.treeData.data,
-                        parentId: $scope.nodeBeingEdited.parent.id,
-                        childId: $scope.nodeBeingEdited.id
-                    });
-
-                    if (_.includes(siblingConnectionTypes, "success") || _.includes(siblingConnectionTypes, "failure")) {
-                        updateEdgeDropdownOptions(["success", "failure"]);
-                    } else if (_.includes(siblingConnectionTypes, "always") && $scope.nodeBeingEdited.edgeType === "always") {
-                        updateEdgeDropdownOptions(["always"]);
-                    } else {
-                        updateEdgeDropdownOptions();
-                    }
-
-                    switch($scope.nodeBeingEdited.edgeType) {
-                       case "always":
-                           $scope.edgeType = {label: i18n._("Always"), value: "always"};
-                           if (
-                               _.includes(siblingConnectionTypes, "always") &&
-                               !_.includes(siblingConnectionTypes, "success") &&
-                               !_.includes(siblingConnectionTypes, "failure")
-                           ) {
-                               updateEdgeDropdownOptions(["always"]);
-                           } else {
-                               updateEdgeDropdownOptions();
-                           }
-                           break;
-                       case "success":
-                           $scope.edgeType = {label: i18n._("On Success"), value: "success"};
-                           if (
-                               (_.includes(siblingConnectionTypes, "success") || _.includes(siblingConnectionTypes, "failure")) &&
-                               !_.includes(siblingConnectionTypes, "always")
-                           ) {
-                               updateEdgeDropdownOptions(["success", "failure"]);
-                           } else {
-                               updateEdgeDropdownOptions();
-                           }
-                           break;
-                       case "failure":
-                           $scope.edgeType = {label: i18n._("On Failure"), value: "failure"};
-                           if (
-                               (_.includes(siblingConnectionTypes, "success") || _.includes(siblingConnectionTypes, "failure")) &&
-                               !_.includes(siblingConnectionTypes, "always")
-                           ) {
-                               updateEdgeDropdownOptions(["success", "failure"]);
-                           } else {
-                               updateEdgeDropdownOptions();
-                           }
-                           break;
-                   }
-                }
-
-                $scope.treeData.data.totalNodes--;
             }
 
         };
 
-        $scope.toggleFormTab = function(tab) {
-            if ($scope.workflowMakerFormConfig.activeTab !== tab) {
-                $scope.workflowMakerFormConfig.activeTab = tab;
-            }
-        };
-
-        $scope.templateManuallySelected = function(selectedTemplate) {
-
-            if (promptWatcher) {
-                promptWatcher();
-            }
-
-            if (surveyQuestionWatcher) {
-                surveyQuestionWatcher();
-            }
-
-            if (credentialsWatcher) {
-                credentialsWatcher();
-            }
-
-            $scope.promptData = null;
-
-            if (selectedTemplate.type === "job_template") {
-                let jobTemplate = new JobTemplate();
-
-                $q.all([jobTemplate.optionsLaunch(selectedTemplate.id), jobTemplate.getLaunch(selectedTemplate.id)])
-                    .then((responses) => {
-                        let launchConf = responses[1].data;
-
-                        if ((!selectedTemplate.inventory && !launchConf.ask_inventory_on_launch) || !selectedTemplate.project) {
-                            $scope.selectedTemplateInvalid = true;
-                        } else {
-                            $scope.selectedTemplateInvalid = false;
-                        }
-
-                        if (launchConf.passwords_needed_to_start && launchConf.passwords_needed_to_start.length > 0) {
-                            $scope.credentialRequiresPassword = true;
-                        } else {
-                            $scope.credentialRequiresPassword = false;
-                        }
-
-                        $scope.selectedTemplate = angular.copy(selectedTemplate);
-
-                        if (!launchConf.survey_enabled &&
-                            !launchConf.ask_inventory_on_launch &&
-                            !launchConf.ask_credential_on_launch &&
-                            !launchConf.ask_verbosity_on_launch &&
-                            !launchConf.ask_job_type_on_launch &&
-                            !launchConf.ask_limit_on_launch &&
-                            !launchConf.ask_tags_on_launch &&
-                            !launchConf.ask_skip_tags_on_launch &&
-                            !launchConf.ask_diff_mode_on_launch &&
-                            !launchConf.credential_needed_to_start &&
-                            !launchConf.ask_variables_on_launch &&
-                            launchConf.variables_needed_to_start.length === 0) {
-                                $scope.showPromptButton = false;
-                                $scope.promptModalMissingReqFields = false;
-                        } else {
-                            $scope.showPromptButton = true;
-
-                            if (launchConf.ask_inventory_on_launch && !_.has(launchConf, 'defaults.inventory')) {
-                                $scope.promptModalMissingReqFields = true;
-                            } else {
-                                $scope.promptModalMissingReqFields = false;
-                            }
-
-                            if (launchConf.survey_enabled) {
-                                // go out and get the survey questions
-                                jobTemplate.getSurveyQuestions(selectedTemplate.id)
-                                    .then((surveyQuestionRes) => {
-
-                                        let processed = PromptService.processSurveyQuestions({
-                                            surveyQuestions: surveyQuestionRes.data.spec
-                                        });
-
-                                        $scope.missingSurveyValue = processed.missingSurveyValue;
-
-                                        $scope.promptData = {
-                                            launchConf: responses[1].data,
-                                            launchOptions: responses[0].data,
-                                            surveyQuestions: processed.surveyQuestions,
-                                            template: selectedTemplate.id,
-                                            prompts: PromptService.processPromptValues({
-                                                launchConf: responses[1].data,
-                                                launchOptions: responses[0].data
-                                            }),
-                                        };
-
-                                        surveyQuestionWatcher = $scope.$watch('promptData.surveyQuestions', () => {
-                                            let missingSurveyValue = false;
-                                            _.each($scope.promptData.surveyQuestions, (question) => {
-                                                if (question.required && (Empty(question.model) || question.model === [])) {
-                                                    missingSurveyValue = true;
-                                                }
-                                            });
-                                            $scope.missingSurveyValue = missingSurveyValue;
-                                        }, true);
-
-                                        watchForPromptChanges();
-                                    });
-                            } else {
-                                $scope.promptData = {
-                                    launchConf: responses[1].data,
-                                    launchOptions: responses[0].data,
-                                    template: selectedTemplate.id,
-                                    prompts: PromptService.processPromptValues({
-                                        launchConf: responses[1].data,
-                                        launchOptions: responses[0].data
-                                    }),
-                                };
-
-                                watchForPromptChanges();
-                            }
-                        }
-                    });
-            } else {
-                $scope.selectedTemplate = angular.copy(selectedTemplate);
-                $scope.selectedTemplateInvalid = false;
-                $scope.showPromptButton = false;
-                $scope.promptModalMissingReqFields = false;
-            }
-        };
-
-        function resetEdgeConflict(){
-            $scope.edgeFlags.conflict = false;
-
-            WorkflowService.checkForEdgeConflicts({
-                treeData: $scope.treeData.data,
-                edgeFlags: $scope.edgeFlags
-            });
-        }
-
-        $scope.toggleManualControls = function() {
+        $scope.toggleManualControls = () => {
             $scope.showManualControls = !$scope.showManualControls;
         };
 
-        $scope.panChart = function(direction) {
+        $scope.panChart = (direction) => {
             $scope.$broadcast('panWorkflowChart', {
                 direction: direction
             });
         };
 
-        $scope.zoomChart = function(zoom) {
+        $scope.zoomChart = (zoom) => {
             $scope.$broadcast('zoomWorkflowChart', {
                 zoom: zoom
             });
         };
 
-        $scope.resetChart = function() {
+        $scope.resetChart = () => {
             $scope.$broadcast('resetWorkflowChart');
         };
 
-        $scope.workflowZoomed = function(zoom) {
+        $scope.workflowZoomed = (zoom) => {
             $scope.$broadcast('workflowZoomed', {
                 zoom: zoom
             });
         };
 
-        $scope.zoomToFitChart = function() {
+        $scope.zoomToFitChart = () => {
             $scope.$broadcast('zoomToFitChart');
         };
-
-        $scope.openPromptModal = function() {
-            $scope.promptData.triggerModalOpen = true;
-        };
-
-        let allNodes = [];
-        let page = 1;
-
-        let buildTreeFromNodes = function(){
-            WorkflowService.buildTree({
-                workflowNodes: allNodes
-            }).then(function(data){
-                $scope.treeData = data;
-
-                // TODO: I think that the workflow chart directive (and eventually d3) is meddling with
-                // this treeData object and removing the children object for some reason (?)
-                // This happens on occasion and I think is a race condition (?)
-                if (!$scope.treeData.data.children) {
-                    $scope.treeData.data.children = [];
-                }
-
-                $scope.treeData.workflow_job_template_obj = $scope.workflowJobTemplateObj;
-
-                $scope.treeDataMaster = angular.copy($scope.treeData.data);
-                $scope.showManualControls = false;
-            });
-        };
-
-        let getNodes = function(){
-            // Get the workflow nodes
-            TemplatesService.getWorkflowJobTemplateNodes($scope.workflowJobTemplateObj.id, page)
-            .then(function(data){
-                for(var i=0; i<data.data.results.length; i++) {
-                    allNodes.push(data.data.results[i]);
-                }
-                if (data.data.next) {
-                    // Get the next page
-                    page++;
-                    getNodes();
-                } else {
-                    // This is the last page
-                    buildTreeFromNodes();
-                }
-            }, function(error){
-                ProcessErrors($scope, error.data, error.status, null, {
-                    hdr: 'Error!',
-                    msg: 'Failed to get workflow job template nodes. GET returned ' +
-                    'status: ' + error.status
-                });
-            });
-        };
-
-        getNodes();
-
-        updateEdgeDropdownOptions();
-
     }
 ];

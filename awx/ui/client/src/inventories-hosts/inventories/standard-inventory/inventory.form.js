@@ -66,17 +66,12 @@ function(i18n) {
                 dataContainer: 'body',
                 control: '<instance-groups-multiselect instance-groups="instance_groups" field-is-disabled="!(inventory_obj.summary_fields.user_capabilities.edit || canAdd)"></instance-groups-multiselect>',
             },
-            inventory_variables: {
-                realName: 'variables',
+            variables: {
                 label: i18n._('Variables'),
-                type: 'textarea',
+                type: 'code_mirror',
                 class: 'Form-formGroup--fullWidth',
-                rows: 6,
-                "default": "---",
+                variables: 'variables',
                 awPopOver: i18n._('Enter inventory variables using either JSON or YAML syntax. Use the radio button to toggle between the two. Refer to the Ansible Tower documentation for example syntax.'),
-                dataTitle: i18n._('Variables'),
-                dataPlacement: 'right',
-                dataContainer: 'body',
                 ngDisabled: '!(inventory_obj.summary_fields.user_capabilities.edit || canAdd)' // TODO: get working
             }
         },
@@ -126,19 +121,19 @@ function(i18n) {
                         key: true,
                         label: i18n._('User'),
                         linkBase: 'users',
-                        class: 'col-lg-3 col-md-3 col-sm-3 col-xs-4'
+                        columnClass: 'col-sm-3 col-xs-4'
                     },
                     role: {
                         label: i18n._('Role'),
                         type: 'role',
                         nosort: true,
-                        class: 'col-lg-4 col-md-4 col-sm-4 col-xs-4',
+                        columnClass: 'col-sm-4 col-xs-4'
                     },
                     team_roles: {
                         label: i18n._('Team Roles'),
                         type: 'team_roles',
                         nosort: true,
-                        class: 'col-lg-5 col-md-5 col-sm-5 col-xs-4',
+                        columnClass: 'col-sm-5 col-xs-4'
                     }
                 }
             },
@@ -149,6 +144,7 @@ function(i18n) {
                 include: "GroupList",
                 title: i18n._('Groups'),
                 iterator: 'group',
+                tabSelected: `$state.includes('inventories.edit.groups') || $state.includes('inventories.edit.rootGroups')`,
                 skipGenerator: true
             },
             hosts: {

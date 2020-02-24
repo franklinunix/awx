@@ -3,7 +3,6 @@
 
 from awx.main.models import Instance, InstanceGroup
 from django.core.management.base import BaseCommand
-import six
 
 
 class Ungrouped(object):
@@ -42,15 +41,17 @@ class Command(BaseCommand):
                 fmt += ' policy>={0.policy_instance_minimum}'
             if instance_group.controller:
                 fmt += ' controller={0.controller.name}'
-            print(six.text_type(fmt + ']').format(instance_group))
+            print((fmt + ']').format(instance_group))
             for x in instance_group.instances.all():
                 color = '\033[92m'
-                if x.capacity == 0 or x.enabled is False:
+                if x.capacity == 0:
                     color = '\033[91m'
+                if x.enabled is False:
+                    color = '\033[90m[DISABLED] '
                 fmt = '\t' + color + '{0.hostname} capacity={0.capacity} version={1}'
                 if x.last_isolated_check:
                     fmt += ' last_isolated_check="{0.last_isolated_check:%Y-%m-%d %H:%M:%S}"'
                 if x.capacity:
                     fmt += ' heartbeat="{0.modified:%Y-%m-%d %H:%M:%S}"'
-                print(six.text_type(fmt + '\033[0m').format(x, x.version or '?'))
+                print((fmt + '\033[0m').format(x, x.version or '?'))
             print('')

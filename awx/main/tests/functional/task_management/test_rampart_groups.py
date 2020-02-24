@@ -1,5 +1,5 @@
 import pytest
-import mock
+from unittest import mock
 from datetime import timedelta
 from awx.main.scheduler import TaskManager
 from awx.main.models import InstanceGroup, WorkflowJob
@@ -67,7 +67,7 @@ def test_multi_group_with_shared_dependency(instance_factory, default_instance_g
         pu = p.project_updates.first()
         TaskManager.start_task.assert_called_once_with(pu,
                                                        default_instance_group,
-                                                       [j1],
+                                                       [j1,j2],
                                                        default_instance_group.instances.all()[0])
         pu.finished = pu.created + timedelta(seconds=1)
         pu.status = "successful"
@@ -82,14 +82,14 @@ def test_multi_group_with_shared_dependency(instance_factory, default_instance_g
 
 @pytest.mark.django_db
 def test_workflow_job_no_instancegroup(workflow_job_template_factory, default_instance_group, mocker):
-        wfjt = workflow_job_template_factory('anicedayforawalk').workflow_job_template
-        wfj = WorkflowJob.objects.create(workflow_job_template=wfjt)
-        wfj.status = "pending"
-        wfj.save()
-        with mocker.patch("awx.main.scheduler.TaskManager.start_task"):
-            TaskManager().schedule()
-            TaskManager.start_task.assert_called_once_with(wfj, None, [], None)
-            assert wfj.instance_group is None
+    wfjt = workflow_job_template_factory('anicedayforawalk').workflow_job_template
+    wfj = WorkflowJob.objects.create(workflow_job_template=wfjt)
+    wfj.status = "pending"
+    wfj.save()
+    with mocker.patch("awx.main.scheduler.TaskManager.start_task"):
+        TaskManager().schedule()
+        TaskManager.start_task.assert_called_once_with(wfj, None, [], None)
+        assert wfj.instance_group is None
 
 
 @pytest.mark.django_db
@@ -193,7 +193,7 @@ def test_instance_group_basic_policies(instance_factory, instance_group_factory)
     ig2 = InstanceGroup.objects.get(id=ig2.id)
     ig3 = InstanceGroup.objects.get(id=ig3.id)
     assert len(ig0.instances.all()) == 1
-    assert i0 in ig0.instances.all() 
+    assert i0 in ig0.instances.all()
     assert len(InstanceGroup.objects.get(id=ig1.id).instances.all()) == 2
     assert i1 in ig1.instances.all()
     assert i2 in ig1.instances.all()

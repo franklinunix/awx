@@ -36,9 +36,7 @@
 @import '../../legacy/styles/text-label';
 @import '../../legacy/styles/bootstrap-datepicker';
 @import '../../legacy/styles/ansible-ui';
-
-// Dependency Style Overrides
-@import '../../src/shared/bootstrap-settings';
+@import '../../legacy/styles/bootstrap-custom-overrides';
 
 // Legacy Utilities
 @import '../../src/shared/utilities/alerts';
@@ -65,7 +63,7 @@
 @import '../../src/activity-stream/streamDetailModal/streamDetailModal.block.less';
 @import '../../src/activity-stream/activitystream.block.less';
 @import '../../src/bread-crumb/bread-crumb.block.less';
-@import '../../src/configuration/configuration.block.less';
+@import '../../src/configuration/settings.block.less';
 @import '../../src/credentials/ownerList.block.less';
 @import '../../src/home/dashboard/counts/dashboard-counts.block.less';
 @import '../../src/home/dashboard/graphs/dashboard-graphs.block.less';
@@ -81,7 +79,6 @@
 @import '../../src/inventories-hosts/inventories/inventories.block.less';
 @import '../../src/inventories-hosts/shared/associate-groups/associate-groups.block.less';
 @import '../../src/inventories-hosts/shared/associate-hosts/associate-hosts.block.less';
-@import '../../src/job-submission/job-submission.block.less';
 @import '../../src/license/license.block.less';
 @import '../../src/login/loginModal/thirdPartySignOn/thirdPartySignOn.block.less';
 @import '../../src/login/loginModal/loginModal.block.less';
@@ -92,9 +89,9 @@
 @import '../../src/organizations/orgcards.block.less';
 @import '../../src/scheduler/repeatFrequencyOptions.block.less';
 @import '../../src/scheduler/schedulerForm.block.less';
+@import '../../src/scheduler/schedulerDatePicker.block.less';
 @import '../../src/scheduler/schedulerFormDetail.block.less';
 @import '../../src/scheduler/schedulertime.block.less';
-@import '../../src/scheduler/scheduleToggle.block.less';
 @import '../../src/scheduler/spinnerInput.block.less';
 @import '../../src/shared/container/container.block.less';
 @import '../../src/shared/detail-nav/detail-nav.block.less';
@@ -113,13 +110,9 @@
 @import '../../src/shared/upgrade/upgrade.block.less';
 @import '../../src/smart-status/smart-status.block.less';
 @import '../../src/workflow-results/standard-out.block.less';
-@import '../../src/system-tracking/date-picker/date-picker.block.less';
-@import '../../src/system-tracking/fact-data-table/fact-data-table.block.less';
-@import '../../src/system-tracking/fact-module-filter.block.less';
-@import '../../src/system-tracking/fact-module-pickers.block.less';
-@import '../../src/system-tracking/system-tracking-container.block.less';
 @import '../../src/templates/prompt/prompt.block.less';
 @import '../../src/templates/job_templates/multi-credential/multi-credential.block.less';
+@import '../../src/templates/job_templates/webhook-credential/webhook-credential.block.less';
 @import '../../src/templates/labels/labelsList.block.less';
 @import '../../src/templates/survey-maker/survey-maker.block.less';
 @import '../../src/templates/survey-maker/survey-maker.block.less';
@@ -132,7 +125,6 @@
 @import '../../src/tooltip/tooltip.block.less';
 @import '../../src/workflow-results/workflow-status-bar/workflow-status-bar.block.less';
 @import '../../src/workflow-results/workflow-results.block.less';
-
 
 /**
  * App-wide style

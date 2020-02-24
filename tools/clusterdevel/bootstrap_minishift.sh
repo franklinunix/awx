@@ -16,7 +16,6 @@ fi
 
 #make awx-link
 python setup.py develop
-ln -s /awx_devel/tools/rdb.py /venv/awx/lib/python2.7/site-packages/rdb.py || true
 yes | cp -rf /awx_devel/tools/docker-compose/supervisor.conf /supervisor.conf
 
 # AWX bootstrapping
@@ -28,9 +27,4 @@ mkdir -p /awx_devel/awx/public/static
 mkdir -p /awx_devel/awx/ui/static
 
 cd /awx_devel
-# Start the services
-if [ -f "/awx_devel/tools/docker-compose/use_dev_supervisor.txt" ]; then
-    make supervisor
-else
-    honcho start -f "tools/docker-compose/Procfile"
-fi
+make supervisor

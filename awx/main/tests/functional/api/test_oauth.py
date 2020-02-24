@@ -4,16 +4,13 @@ import json
 
 from django.db import connection
 from django.test.utils import override_settings
-from django.test import Client
-from django.core.urlresolvers import resolve
-from rest_framework.test import APIRequestFactory
+from django.utils.encoding import smart_str, smart_bytes
 
-from awx.main.middleware import DeprecatedAuthTokenMiddleware
 from awx.main.utils.encryption import decrypt_value, get_encryption_key
 from awx.api.versioning import reverse, drf_reverse
 from awx.main.models.oauth import (OAuth2Application as Application, 
-                                   OAuth2AccessToken as AccessToken, 
-                                   )
+                                   OAuth2AccessToken as AccessToken)
+from awx.main.tests.functional import immediate_on_commit
 from awx.sso.models import UserEnterpriseAuth
 from oauth2_provider.models import RefreshToken
 
@@ -25,11 +22,11 @@ def test_personal_access_token_creation(oauth_application, post, alice):
         url,
         data='grant_type=password&username=alice&password=alice&scope=read',
         content_type='application/x-www-form-urlencoded',
-        HTTP_AUTHORIZATION='Basic ' + base64.b64encode(':'.join([
+        HTTP_AUTHORIZATION='Basic ' + smart_str(base64.b64encode(smart_bytes(':'.join([
             oauth_application.client_id, oauth_application.client_secret
-        ]))
+        ]))))
     )
-    resp_json = resp._container[0]
+    resp_json = smart_str(resp._container[0])
     assert 'access_token' in resp_json
     assert 'scope' in resp_json
     assert 'refresh_token' in resp_json
@@ -46,16 +43,51 @@ def test_token_creation_disabled_for_external_accounts(oauth_application, post, 
             url,
             data='grant_type=password&username=alice&password=alice&scope=read',
             content_type='application/x-www-form-urlencoded',
-            HTTP_AUTHORIZATION='Basic ' + base64.b64encode(':'.join([
+            HTTP_AUTHORIZATION='Basic ' + smart_str(base64.b64encode(smart_bytes(':'.join([
                 oauth_application.client_id, oauth_application.client_secret
-            ])),
+            ])))),
             status=status
         )
         if allow_oauth:
             assert AccessToken.objects.count() == 1
         else:
-            assert 'OAuth2 Tokens cannot be created by users associated with an external authentication provider' in resp.content
+            assert 'OAuth2 Tokens cannot be created by users associated with an external authentication provider' in smart_str(resp.content)  # noqa
             assert AccessToken.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_existing_token_enabled_for_external_accounts(oauth_application, get, post, admin):
+    UserEnterpriseAuth(user=admin, provider='radius').save()
+    url = drf_reverse('api:oauth_authorization_root_view') + 'token/'
+    with override_settings(RADIUS_SERVER='example.org', ALLOW_OAUTH2_FOR_EXTERNAL_USERS=True):
+        resp = post(
+            url,
+            data='grant_type=password&username=admin&password=admin&scope=read',
+            content_type='application/x-www-form-urlencoded',
+            HTTP_AUTHORIZATION='Basic ' + smart_str(base64.b64encode(smart_bytes(':'.join([
+                oauth_application.client_id, oauth_application.client_secret
+            ])))),
+            status=201
+        )
+        token = json.loads(resp.content)['access_token']
+        assert AccessToken.objects.count() == 1
+
+        with immediate_on_commit():
+            resp = get(
+                drf_reverse('api:user_me_list', kwargs={'version': 'v2'}),
+                HTTP_AUTHORIZATION='Bearer ' + token,
+                status=200
+            )
+            assert json.loads(resp.content)['results'][0]['username'] == 'admin'
+
+    with override_settings(RADIUS_SERVER='example.org', ALLOW_OAUTH2_FOR_EXTERNAL_USER=False):
+        with immediate_on_commit():
+            resp = get(
+                drf_reverse('api:user_me_list', kwargs={'version': 'v2'}),
+                HTTP_AUTHORIZATION='Bearer ' + token,
+                status=200
+            )
+            assert json.loads(resp.content)['results'][0]['username'] == 'admin'
 
 
 @pytest.mark.django_db
@@ -117,7 +149,7 @@ def test_oauth_application_update(oauth_application, organization, patch, admin,
             'name': 'Test app with immutable grant type and user',
             'organization': organization.pk,
             'redirect_uris': 'http://localhost/api/',
-            'authorization_grant_type': 'implicit',
+            'authorization_grant_type': 'password',
             'skip_authorization': True,
         }, admin, expect=200
     )
@@ -178,27 +210,22 @@ def test_oauth_token_create(oauth_application, get, post, admin):
     assert response.data['summary_fields']['tokens']['results'][0] == {
         'id': token.pk, 'scope': token.scope, 'token': '************'
     }
-    # If the application is implicit grant type, no new refresb tokens should be created.
-    # The following tests check for that.
-    oauth_application.authorization_grant_type = 'implicit'
-    oauth_application.save()
-    token_count = RefreshToken.objects.count()
+
     response = post(
         reverse('api:o_auth2_token_list'),
         {'scope': 'read', 'application': oauth_application.pk}, admin, expect=201
     )
-    assert response.data['refresh_token'] is None
+    assert response.data['refresh_token']
     response = post(
         reverse('api:user_authorized_token_list', kwargs={'pk': admin.pk}),
         {'scope': 'read', 'application': oauth_application.pk}, admin, expect=201
     )
-    assert response.data['refresh_token'] is None
+    assert response.data['refresh_token']
     response = post(
         reverse('api:application_o_auth2_token_list', kwargs={'pk': oauth_application.pk}),
         {'scope': 'read'}, admin, expect=201
     )
-    assert response.data['refresh_token'] is None
-    assert token_count == RefreshToken.objects.count()
+    assert response.data['refresh_token']
 
 
 @pytest.mark.django_db
@@ -263,30 +290,6 @@ def test_oauth_list_user_tokens(oauth_application, post, get, admin, alice):
         post(url, {'scope': 'read'}, user, expect=201)
         response = get(url, admin, expect=200)
         assert response.data['count'] == 1
-
-
-@pytest.mark.django_db
-def test_implicit_authorization(oauth_application, admin):
-    oauth_application.client_type = 'confidential'
-    oauth_application.authorization_grant_type = 'implicit'
-    oauth_application.redirect_uris = 'http://test.com'
-    oauth_application.save()
-    data = {
-        'response_type': 'token',
-        'client_id': oauth_application.client_id,
-        'client_secret': oauth_application.client_secret,
-        'scope': 'read',
-        'redirect_uri': 'http://test.com', 
-        'allow': True
-    }
-
-    request_client = Client()
-    request_client.force_login(admin, 'django.contrib.auth.backends.ModelBackend')
-    refresh_token_count = RefreshToken.objects.count()
-    response = request_client.post(drf_reverse('api:authorize'), data)
-    assert 'http://test.com' in response.url and 'access_token' in response.url
-    # Make sure no refresh token is created for app with implicit grant type.
-    assert refresh_token_count == RefreshToken.objects.count()
     
 
 @pytest.mark.django_db
@@ -305,9 +308,9 @@ def test_refresh_accesstoken(oauth_application, post, get, delete, admin):
         refresh_url,
         data='grant_type=refresh_token&refresh_token=' + refresh_token.token,
         content_type='application/x-www-form-urlencoded',
-        HTTP_AUTHORIZATION='Basic ' + base64.b64encode(':'.join([
+        HTTP_AUTHORIZATION='Basic ' + smart_str(base64.b64encode(smart_bytes(':'.join([
             oauth_application.client_id, oauth_application.client_secret
-        ]))
+        ]))))
     )
     assert RefreshToken.objects.filter(token=refresh_token).exists()
     original_refresh_token = RefreshToken.objects.get(token=refresh_token)
@@ -361,52 +364,3 @@ def test_revoke_refreshtoken(oauth_application, post, get, delete, admin):
     new_refresh_token = RefreshToken.objects.all().first()
     assert refresh_token == new_refresh_token
     assert new_refresh_token.revoked
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize('fmt', ['json', 'multipart'])
-def test_deprecated_authtoken_support(alice, fmt):
-    kwargs = {
-        'data': {'username': 'alice', 'password': 'alice'},
-        'format': fmt
-    }
-    request = getattr(APIRequestFactory(), 'post')('/api/v2/authtoken/', **kwargs)
-    DeprecatedAuthTokenMiddleware().process_request(request)
-    assert request.path == request.path_info == '/api/v2/users/{}/personal_tokens/'.format(alice.pk)
-    view, view_args, view_kwargs = resolve(request.path)
-    resp = view(request, *view_args, **view_kwargs)
-    assert resp.status_code == 201
-    assert 'token' in resp.data
-    assert resp.data['refresh_token'] is None
-    assert resp.data['scope'] == 'write'
-
-    for _type in ('Token', 'Bearer'):
-        request = getattr(APIRequestFactory(), 'get')(
-            '/api/v2/me/',
-            HTTP_AUTHORIZATION=' '.join([_type, resp.data['token']])
-        )
-        DeprecatedAuthTokenMiddleware().process_request(request)
-        view, view_args, view_kwargs = resolve(request.path)
-        assert view(request, *view_args, **view_kwargs).status_code == 200
-
-
-@pytest.mark.django_db
-def test_deprecated_authtoken_invalid_username(alice):
-    kwargs = {
-        'data': {'username': 'nobody', 'password': 'nobody'},
-        'format': 'json'
-    }
-    request = getattr(APIRequestFactory(), 'post')('/api/v2/authtoken/', **kwargs)
-    resp = DeprecatedAuthTokenMiddleware().process_request(request)
-    assert resp.status_code == 401
-
-
-@pytest.mark.django_db
-def test_deprecated_authtoken_missing_credentials(alice):
-    kwargs = {
-        'data': {},
-        'format': 'json'
-    }
-    request = getattr(APIRequestFactory(), 'post')('/api/v2/authtoken/', **kwargs)
-    resp = DeprecatedAuthTokenMiddleware().process_request(request)
-    assert resp.status_code == 401

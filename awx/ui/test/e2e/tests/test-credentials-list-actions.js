@@ -12,7 +12,6 @@ module.exports = {
         const credentials = client.page.credentials();
 
         client.useCss();
-        client.resizeWindow(1200, 800);
         client.login();
         client.waitForAngular();
 
@@ -30,7 +29,7 @@ module.exports = {
         credentials.waitForElementVisible('div.spinny');
         credentials.waitForElementNotVisible('div.spinny');
 
-        credentials.expect.element(`#credentials_table tr[id="${data.credential.id}"]`).visible;
+        credentials.expect.element(`#credentials_table .List-tableRow[id="${data.credential.id}"]`).visible;
         credentials.expect.element('i[class*="copy"]').visible;
         credentials.expect.element('i[class*="copy"]').enabled;
 
@@ -39,7 +38,7 @@ module.exports = {
         credentials.waitForElementNotVisible('div.spinny');
 
         const activityStream = 'bread-crumb > div i[class$="icon-activity-stream"]';
-        const activityRow = '#activities_table tr td[class*="description-column"] a';
+        const activityRow = '#activities_table .List-tableCell[class*="description-column"] a';
         const toast = 'div[class="Toast-icon"]';
 
         credentials.waitForElementNotPresent(toast);

@@ -18,6 +18,13 @@ export default {
             squash: ''
         }
     },
+    data: {
+        socket: {
+            groups: {
+                jobs: ['status_changed']
+            }
+        }
+    },
     ncyBreadcrumb: {
         label: N_('JOBS')
     },
@@ -50,7 +57,9 @@ export default {
                 const searchParam = _.assign($stateParams.job_search, {
                     or__job__inventory: inventoryId,
                     or__adhoccommand__inventory: inventoryId,
-                    or__inventoryupdate__inventory_source__inventory: inventoryId });
+                    or__inventoryupdate__inventory_source__inventory: inventoryId,
+                    or__workflowjob__inventory: inventoryId,
+                });
 
                 const searchPath = GetBasePath('unified_jobs');
 

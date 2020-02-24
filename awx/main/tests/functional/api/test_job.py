@@ -1,12 +1,14 @@
 # Python
 import pytest
-import mock
+from unittest import mock
 from dateutil.parser import parse
 from dateutil.relativedelta import relativedelta
 from crum import impersonate
+import datetime
 
 # Django rest framework
 from rest_framework.exceptions import PermissionDenied
+from django.utils import timezone
 
 # AWX
 from awx.api.versioning import reverse
@@ -29,7 +31,7 @@ def test_extra_credentials(get, organization_factory, job_template_factory, cred
     jt.save()
     job = jt.create_unified_job()
 
-    url = reverse('api:job_extra_credentials_list', kwargs={'version': 'v2', 'pk': job.pk})
+    url = reverse('api:job_extra_credentials_list', kwargs={'pk': job.pk})
     response = get(url, user=objs.superusers.admin)
     assert response.data.get('count') == 1
 
@@ -56,7 +58,7 @@ def test_job_relaunch_permission_denied_response(
 
 
 @pytest.mark.django_db
-def test_job_relaunch_permission_denied_response_other_user(get, post, inventory, project, alice, bob):
+def test_job_relaunch_permission_denied_response_other_user(get, post, inventory, project, alice, bob, survey_spec_factory):
     '''
     Asserts custom permission denied message corresponding to
     awx/main/tests/functional/test_rbac_job.py::TestJobRelaunchAccess::test_other_user_prompts
@@ -64,18 +66,26 @@ def test_job_relaunch_permission_denied_response_other_user(get, post, inventory
     jt = JobTemplate.objects.create(
         name='testjt', inventory=inventory, project=project,
         ask_credential_on_launch=True,
-        ask_variables_on_launch=True)
+        ask_variables_on_launch=True,
+        survey_spec=survey_spec_factory([{'variable': 'secret_key', 'default': '6kQngg3h8lgiSTvIEb21', 'type': 'password'}]),
+        survey_enabled=True
+    )
     jt.execute_role.members.add(alice, bob)
     with impersonate(bob):
-        job = jt.create_unified_job(extra_vars={'job_var': 'foo2'})
+        job = jt.create_unified_job(extra_vars={'job_var': 'foo2', 'secret_key': 'sk4t3Rb01'})
 
     # User capability is shown for this
     r = get(job.get_absolute_url(), alice, expect=200)
     assert r.data['summary_fields']['user_capabilities']['start']
 
     # Job has prompted data, launch denied w/ message
-    r = post(reverse('api:job_relaunch', kwargs={'pk':job.pk}), {}, alice, expect=403)
-    assert 'Job was launched with prompts provided by another user' in r.data['detail']
+    r = post(
+        url=reverse('api:job_relaunch', kwargs={'pk':job.pk}),
+        data={},
+        user=alice,
+        expect=403
+    )
+    assert 'Job was launched with secret prompts provided by another user' in r.data['detail']
 
 
 @pytest.mark.django_db
@@ -123,6 +133,47 @@ def test_job_relaunch_on_failed_hosts(post, inventory, project, machine_credenti
 
 
 @pytest.mark.django_db
+def test_summary_fields_recent_jobs(job_template, admin_user, get):
+    jobs = []
+    for i in range(13):
+        jobs.append(Job.objects.create(
+            job_template=job_template,
+            status='failed',
+            created=timezone.make_aware(datetime.datetime(2017, 3, 21, 9, i)),
+            finished=timezone.make_aware(datetime.datetime(2017, 3, 21, 10, i))
+        ))
+    r = get(
+        url = job_template.get_absolute_url(),
+        user = admin_user,
+        exepect = 200
+    )
+    recent_jobs = r.data['summary_fields']['recent_jobs']
+    assert len(recent_jobs) == 10
+    assert recent_jobs == [{
+        'id': job.id,
+        'status': 'failed',
+        'finished': job.finished,
+        'canceled_on': None,
+        'type': 'job'      
+    } for job in jobs[-10:][::-1]]
+
+
+@pytest.mark.django_db
+def test_slice_jt_recent_jobs(slice_job_factory, admin_user, get):
+    workflow_job = slice_job_factory(3, spawn=True)
+    slice_jt = workflow_job.job_template
+    r = get(
+        url=slice_jt.get_absolute_url(),
+        user=admin_user,
+        expect=200
+    )
+    job_ids = [entry['id'] for entry in r.data['summary_fields']['recent_jobs']]
+    # decision is that workflow job should be shown in the related jobs
+    # joblets of the workflow job should NOT be shown
+    assert job_ids == [workflow_job.pk]
+
+
+@pytest.mark.django_db
 def test_block_unprocessed_events(delete, admin_user, mocker):
     time_of_finish = parse("Thu Feb 28 09:10:20 2013 -0500")
     job = Job.objects.create(
@@ -141,7 +192,7 @@ def test_block_unprocessed_events(delete, admin_user, mocker):
     view = MockView()
 
     time_of_request = time_of_finish + relativedelta(seconds=2)
-    with mock.patch('awx.api.views.now', lambda: time_of_request):
+    with mock.patch('awx.api.views.mixin.now', lambda: time_of_request):
         r = view.destroy(request)
         assert r.status_code == 400
 
@@ -162,7 +213,7 @@ def test_block_related_unprocessed_events(mocker, organization, project, delete,
     )
     view = RelatedJobsPreventDeleteMixin()
     time_of_request = time_of_finish + relativedelta(seconds=2)
-    with mock.patch('awx.api.views.now', lambda: time_of_request):
+    with mock.patch('awx.api.views.mixin.now', lambda: time_of_request):
         with pytest.raises(PermissionDenied):
             view.perform_destroy(organization)
 
@@ -175,19 +226,19 @@ def test_disallowed_http_update_methods(put, patch, post, inventory, project, ad
     )
     job = jt.create_unified_job()
     post(
-        url=reverse('api:job_detail', kwargs={'pk': job.pk, 'version': 'v2'}),
+        url=reverse('api:job_detail', kwargs={'pk': job.pk}),
         data={},
         user=admin_user,
         expect=405
     )
     put(
-        url=reverse('api:job_detail', kwargs={'pk': job.pk, 'version': 'v2'}),
+        url=reverse('api:job_detail', kwargs={'pk': job.pk}),
         data={},
         user=admin_user,
         expect=405
     )
     patch(
-        url=reverse('api:job_detail', kwargs={'pk': job.pk, 'version': 'v2'}),
+        url=reverse('api:job_detail', kwargs={'pk': job.pk}),
         data={},
         user=admin_user,
         expect=405

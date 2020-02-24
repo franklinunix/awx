@@ -1,6 +1,6 @@
 import pytest
 
-import mock
+from unittest import mock
 
 from awx.main.access import CredentialAccess
 from awx.main.models.credential import Credential
@@ -72,6 +72,19 @@ def test_org_credential_access_admin(role_name, alice, org_credential):
     assert access.can_change(org_credential, {
         'description': 'New description.',
         'organization': org_credential.organization.pk})
+
+
+@pytest.mark.django_db
+def test_org_and_user_credential_access(alice, organization):
+    """Address specific bug where any user could make an org credential
+    in another org without any permissions to that org
+    """
+    # Owner is both user and org, but org permission should still be checked
+    assert not CredentialAccess(alice).can_add({
+        'name': 'New credential.',
+        'user': alice.pk,
+        'organization': organization.pk
+    })
 
 
 @pytest.mark.django_db

@@ -5,29 +5,25 @@
  *************************************************/
 
 export default ['$scope', '$rootScope', '$stateParams', 'ProjectsForm', 'Rest',
-    'Alert', 'ProcessErrors', 'GenerateForm', 'Prompt',
+    'Alert', 'ProcessErrors', 'GenerateForm', 'Prompt', 'isNotificationAdmin',
     'GetBasePath', 'GetProjectPath', 'Authorization', 'GetChoices', 'Empty',
     'Wait', 'ProjectUpdate', '$state', 'CreateSelect2', 'ToggleNotification',
-    'i18n', 'CredentialTypes', 'OrgAdminLookup', 'ConfigData',
+    'i18n', 'OrgAdminLookup', 'ConfigData', 'scmCredentialType', 'insightsCredentialType',
     function($scope, $rootScope, $stateParams, ProjectsForm, Rest, Alert,
-    ProcessErrors, GenerateForm, Prompt, GetBasePath,
+    ProcessErrors, GenerateForm, Prompt, isNotificationAdmin, GetBasePath,
     GetProjectPath, Authorization, GetChoices, Empty, Wait, ProjectUpdate,
-    $state, CreateSelect2, ToggleNotification, i18n, CredentialTypes,
-    OrgAdminLookup, ConfigData) {
+    $state, CreateSelect2, ToggleNotification, i18n, OrgAdminLookup,
+    ConfigData, scmCredentialType, insightsCredentialType) {
 
         let form = ProjectsForm(),
             defaultUrl = GetBasePath('projects') + $stateParams.project_id + '/',
             master = {},
             id = $stateParams.project_id;
 
-        init();
-
-        function init() {
-            $scope.project_local_paths = [];
-            $scope.base_dir = '';
-            const virtualEnvs = ConfigData.custom_virtualenvs || [];
-            $scope.custom_virtualenvs_options = virtualEnvs;
-        }
+        $scope.project_local_paths = [];
+        $scope.base_dir = '';
+        const virtualEnvs = ConfigData.custom_virtualenvs || [];
+        $scope.custom_virtualenvs_options = virtualEnvs;
 
         $scope.$watch('project_obj.summary_fields.user_capabilities.edit', function(val) {
             if (val === false) {
@@ -50,20 +46,7 @@ export default ['$scope', '$rootScope', '$stateParams', 'ProjectsForm', 'Rest',
             $scope.projectLoadedRemove();
         }
         $scope.projectLoadedRemove = $scope.$on('projectLoaded', function() {
-            var opts = [];
-
-            if (Authorization.getUserInfo('is_superuser') === true) {
-                GetProjectPath({ scope: $scope, master: master });
-            } else {
-                opts.push({
-                    label: $scope.local_path,
-                    value: $scope.local_path
-                });
-                $scope.project_local_paths = opts;
-                $scope.local_path = $scope.project_local_paths[0];
-                $scope.base_dir = i18n._('You do not have access to view this property');
-                $scope.$emit('pathsReady');
-            }
+            GetProjectPath({ scope: $scope, master: master });
 
             $scope.pathRequired = ($scope.scm_type.value === 'manual') ? true : false;
             $scope.scmRequired = ($scope.scm_type.value !== 'manual') ? true : false;
@@ -156,6 +139,12 @@ export default ['$scope', '$rootScope', '$stateParams', 'ProjectsForm', 'Rest',
                     });
 
                     $scope.project_obj = data;
+                    // To toggle notifications a user needs to have an admin role on the project
+                    // _and_ have at least a notification template admin role on an org.
+                    // Only users with admin role on the project can edit it which is why we
+                    // look at that user_capability
+                    $scope.sufficientRoleForNotifToggle = isNotificationAdmin && data.summary_fields.user_capabilities.edit;
+                    $scope.sufficientRoleForNotif =  isNotificationAdmin || $scope.user_is_system_auditor;
                     $scope.name = data.name;
                     $scope.breadcrumb.project_name = data.name;
                     $scope.$emit('projectLoaded');
@@ -261,6 +250,7 @@ export default ['$scope', '$rootScope', '$stateParams', 'ProjectsForm', 'Rest',
                 $scope.pathRequired = ($scope.scm_type.value === 'manual') ? true : false;
                 $scope.scmRequired = ($scope.scm_type.value !== 'manual') ? true : false;
                 $scope.scmBranchLabel = i18n._('SCM Branch');
+                $scope.scmRefspecLabel = i18n._('SCM Refspec');
 
                 // Dynamically update popover values
                 if ($scope.scm_type.value) {
@@ -321,13 +311,13 @@ export default ['$scope', '$rootScope', '$stateParams', 'ProjectsForm', 'Rest',
         $scope.lookupCredential = function(){
             // Perform a lookup on the credential_type. Git, Mercurial, and Subversion
             // all use SCM as their credential type.
-            let credType = _.filter(CredentialTypes, function(credType){
-                return ($scope.scm_type.value !== "insights" && credType.kind === "scm" ||
-                    $scope.scm_type.value === "insights" && credType.kind === "insights");
-            });
+            let lookupCredentialType = scmCredentialType;
+            if ($scope.scm_type.value === 'insights') {
+                lookupCredentialType = insightsCredentialType;
+            }
             $state.go('.credential', {
                 credential_search: {
-                    credential_type: credType[0].id,
+                    credential_type: lookupCredentialType,
                     page_size: '5',
                     page: '1'
                 }

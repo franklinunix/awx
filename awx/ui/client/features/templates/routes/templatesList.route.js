@@ -13,18 +13,15 @@ export default {
     },
     data: {
         activityStream: true,
-        activityStreamTarget: 'template',
-        socket: {
-            "groups": {
-                "jobs": ["status_changed"]
-            }
-        }
+        activityStreamTarget: 'template'
     },
     params: {
         template_search: {
             dynamic: true,
             value: {
                 type: 'workflow_job_template,job_template',
+                order_by: 'name',
+                page_size: '20'
             },
         }
     },

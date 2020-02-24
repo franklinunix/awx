@@ -4,6 +4,7 @@ import logging
 from channels import Group
 from channels.auth import channel_session_user_from_http, channel_session_user
 
+from django.utils.encoding import smart_str
 from django.http.cookie import parse_cookie
 from django.core.serializers.json import DjangoJSONEncoder
 
@@ -23,14 +24,14 @@ def ws_connect(message):
     headers = dict(message.content.get('headers', ''))
     message.reply_channel.send({"accept": True})
     message.content['method'] = 'FAKE'
-    if message.user.is_authenticated():
+    if message.user.is_authenticated:
         message.reply_channel.send(
             {"text": json.dumps({"accept": True, "user": message.user.id})}
         )
         # store the valid CSRF token from the cookie so we can compare it later
         # on ws_receive
         cookie_token = parse_cookie(
-            headers.get('cookie')
+            smart_str(headers.get(b'cookie'))
         ).get('csrftoken')
         if cookie_token:
             message.channel_session[XRF_KEY] = cookie_token

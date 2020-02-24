@@ -7,7 +7,7 @@ import pytest
 from uuid import uuid4
 import json
 import yaml
-import mock
+from unittest import mock
 
 from backports.tempfile import TemporaryDirectory
 from django.conf import settings
@@ -22,7 +22,11 @@ from awx.main.models import (
     InventoryUpdate,
     ProjectUpdate,
     SystemJob,
-    WorkflowJob
+    WorkflowJob,
+    Inventory,
+    JobTemplate,
+    UnifiedJobTemplate,
+    UnifiedJob
 )
 
 
@@ -59,7 +63,7 @@ class TestParserExceptions:
     @staticmethod
     def yaml_error(data):
         try:
-            yaml.load(data)
+            yaml.safe_load(data)
             return None
         except Exception as e:
             return str(e)
@@ -92,17 +96,38 @@ def test_set_environ():
     assert key not in os.environ
 
 
-# Cases relied on for scheduler dependent jobs list
-@pytest.mark.parametrize('model,name', [
+TEST_MODELS = [
     (Job, 'job'),
     (AdHocCommand, 'ad_hoc_command'),
     (InventoryUpdate, 'inventory_update'),
     (ProjectUpdate, 'project_update'),
     (SystemJob, 'system_job'),
-    (WorkflowJob, 'workflow_job')
-])
+    (WorkflowJob, 'workflow_job'),
+    (UnifiedJob, 'unified_job'),
+    (Inventory, 'inventory'),
+    (JobTemplate, 'job_template'),
+    (UnifiedJobTemplate, 'unified_job_template')
+]
+
+
+# Cases relied on for scheduler dependent jobs list
+@pytest.mark.parametrize('model,name', TEST_MODELS)
 def test_get_type_for_model(model, name):
     assert common.get_type_for_model(model) == name
+
+
+@pytest.mark.django_db
+def test_get_model_for_invalid_type():
+    with pytest.raises(LookupError):
+        common.get_model_for_type('foobar')
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("model_type,model_class", [
+    (name, cls) for cls, name in TEST_MODELS
+])
+def test_get_model_for_valid_type(model_type, model_class):
+    assert common.get_model_for_type(model_type) == model_class
 
 
 @pytest.fixture
@@ -154,12 +179,11 @@ def test_memoize_delete(memoized_function, mock_cache):
 
 
 def test_memoize_parameter_error():
-    @common.memoize(cache_key='foo', track_function=True)
-    def fn():
-        return
 
     with pytest.raises(common.IllegalArgumentError):
-        fn()
+        @common.memoize(cache_key='foo', track_function=True)
+        def fn():
+            return
 
 
 def test_extract_ansible_vars():
@@ -174,13 +198,22 @@ def test_extract_ansible_vars():
 
 def test_get_custom_venv_choices():
     bundled_venv = os.path.join(settings.BASE_VENV_PATH, 'ansible', '')
-    assert common.get_custom_venv_choices() == [bundled_venv]
+    assert sorted(common.get_custom_venv_choices()) == [bundled_venv]
 
     with TemporaryDirectory(dir=settings.BASE_VENV_PATH, prefix='tmp') as temp_dir:
         os.makedirs(os.path.join(temp_dir, 'bin', 'activate'))
-        assert sorted(common.get_custom_venv_choices()) == [
+
+        custom_venv_dir = os.path.join(temp_dir, 'custom')
+        custom_venv_1 = os.path.join(custom_venv_dir, 'venv-1')
+        custom_venv_awx = os.path.join(custom_venv_dir, 'custom', 'awx')
+
+        os.makedirs(os.path.join(custom_venv_1, 'bin', 'activate'))
+        os.makedirs(os.path.join(custom_venv_awx, 'bin', 'activate'))
+
+        assert sorted(common.get_custom_venv_choices([custom_venv_dir])) == [
             bundled_venv,
-            os.path.join(temp_dir, '')
+            os.path.join(temp_dir, ''),
+            os.path.join(custom_venv_1, '')
         ]
 
 

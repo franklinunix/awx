@@ -14,6 +14,12 @@
                 <span>{{ $parent.layoutVm.currentUsername }}</span>
             </a>
         </at-top-nav-item>
+        <at-top-nav-item ng-click="vm.openApprovals()">
+            <div class="at-Layout-Approvals">
+                <i class="fa fa-bell" alt="{{ vm.getString('NOTIFICATIONS') }}"></i>
+                <span class="at-Layout-ApprovalsBadge" ng-class="{'at-Layout-ApprovalsBadgeActive': vm.approvalsCount && vm.approvalsCount > 0}">{{vm.approvalsCount}}</span>
+            </div>
+        </at-top-nav-item>
         <at-top-nav-item>
             <a ui-sref="about">
                 <i class="fa fa-info-circle" alt="{{ vm.getString('ABOUT') }}"></i>
@@ -95,8 +101,8 @@
         <at-side-nav-item icon-class="fa-cubes" route="applications" name="APPLICATIONS"
             ng-show="$parent.layoutVm.isSuperUser || $parent.layoutVm.isOrgAdmin">
         </at-side-nav-item>
-        <at-side-nav-item icon-class="fa-cog" route="configuration" name="SETTINGS"
-            system-admin-only="true">
+        <at-side-nav-item icon-class="fa-cog" route="settings" name="SETTINGS"
+            system-admin-only="true" show-settings-sub-menu="true" no-tooltip-on-collapsed="true">
         </at-side-nav-item>
     </at-side-nav>
     <div class="at-Layout-main" ng-class="{'at-Layout-main--noLicense': vm.licenseIsMissing}">
@@ -104,4 +110,5 @@
             <ng-transclude></ng-transclude>
         </div>
     </div>
+    <at-approvals-drawer ng-if="vm.isLoggedIn && vm.showApprovals" close-approvals="vm.closeApprovals()"></at-approvals-drawer>
 </div>

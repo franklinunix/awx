@@ -92,7 +92,7 @@ class BaseModel(models.Model):
     class Meta:
         abstract = True
 
-    def __unicode__(self):
+    def __str__(self):
         if 'name' in self.__dict__:
             return u'%s-%s' % (self.name, self.pk)
         else:
@@ -152,7 +152,7 @@ class CreatedModifiedModel(BaseModel):
     )
 
     def save(self, *args, **kwargs):
-        update_fields = kwargs.get('update_fields', [])
+        update_fields = list(kwargs.get('update_fields', []))
         # Manually perform auto_now_add and auto_now logic.
         if not self.pk and not self.created:
             self.created = now()
@@ -295,7 +295,10 @@ class PrimordialModel(HasEditsMixin, CreatedModifiedModel):
 
     def __init__(self, *args, **kwargs):
         r = super(PrimordialModel, self).__init__(*args, **kwargs)
-        self._prior_values_store = self._get_fields_snapshot()
+        if self.pk:
+            self._prior_values_store = self._get_fields_snapshot()
+        else:
+            self._prior_values_store = {}
         return r
 
     def save(self, *args, **kwargs):
@@ -386,12 +389,11 @@ class NotificationFieldsModel(BaseModel):
         related_name='%(class)s_notification_templates_for_success'
     )
 
-    notification_templates_any = models.ManyToManyField(
+    notification_templates_started = models.ManyToManyField(
         "NotificationTemplate",
         blank=True,
-        related_name='%(class)s_notification_templates_for_any'
+        related_name='%(class)s_notification_templates_for_started'
     )
-
 
 
 def prevent_search(relation):
@@ -408,4 +410,15 @@ def prevent_search(relation):
     should not be searchable/filterable via search query params
     """
     setattr(relation, '__prevent_search__', True)
+    return relation
+
+
+def accepts_json(relation):
+    """
+    Used to mark a model field as allowing JSON e.g,. JobTemplate.extra_vars
+    This is *mostly* used as a way to provide type hints for certain fields
+    so that HTTP OPTIONS reports the type data we need for the CLI to allow
+    JSON/YAML input.
+    """
+    setattr(relation, '__accepts_json__', True)
     return relation

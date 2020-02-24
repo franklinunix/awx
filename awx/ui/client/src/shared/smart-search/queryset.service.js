@@ -16,11 +16,11 @@ function QuerysetService ($q, Rest, ProcessErrors, $rootScope, Wait, DjangoSearc
             return defer.promise;
         },
         getCommonModelOptions(path, name) {
-            let resolve, base,
+            let base,
                 defer = $q.defer();
 
             this.url = path;
-            resolve = this.options(path)
+            this.options(path)
                 .then((res) => {
                     base = res.data.actions.GET;
                     let relatedSearchFields = res.data.related_search_fields;
@@ -44,7 +44,7 @@ function QuerysetService ($q, Rest, ProcessErrors, $rootScope, Wait, DjangoSearc
         replaceEncodedTokens(value) {
             return decodeURIComponent(value).replace(/"|'/g, "");
         },
-        encodeTerms(value, key){
+        encodeTerms(value, key, singleSearchParam){
             key = this.replaceDefaultFlags(key);
             value = this.replaceDefaultFlags(value);
             var that = this;
@@ -52,7 +52,7 @@ function QuerysetService ($q, Rest, ProcessErrors, $rootScope, Wait, DjangoSearc
                 value = _.uniq(_.flattenDeep(value));
                 let concated = '';
                 angular.forEach(value, function(item){
-                    if(item && typeof item === 'string') {
+                    if(item && typeof item === 'string' && !singleSearchParam) {
                         item = that.replaceEncodedTokens(item);
                     }
                     concated += `${key}=${item}&`;
@@ -61,7 +61,7 @@ function QuerysetService ($q, Rest, ProcessErrors, $rootScope, Wait, DjangoSearc
                 return concated;
             }
             else {
-                if(value && typeof value === 'string') {
+                if(value && typeof value === 'string' && !singleSearchParam) {
                     value = this.replaceEncodedTokens(value);
                 }
 
@@ -69,10 +69,10 @@ function QuerysetService ($q, Rest, ProcessErrors, $rootScope, Wait, DjangoSearc
             }
         },
         // encodes ui-router params from {operand__key__comparator: value} pairs to API-consumable URL
-        encodeQueryset(params) {
+        encodeQueryset(params, singleSearchParam) {
             let queryset;
             queryset = _.reduce(params, (result, value, key) => {
-                return result + this.encodeTerms(value, key);
+                return result + this.encodeTerms(value, key, singleSearchParam);
             }, '');
             queryset = queryset.substring(0, queryset.length - 1);
             return angular.isObject(params) ? `?${queryset}` : '';
@@ -266,9 +266,9 @@ function QuerysetService ($q, Rest, ProcessErrors, $rootScope, Wait, DjangoSearc
             Rest.setUrl(endpoint);
             return Rest.options(endpoint);
         },
-        search(endpoint, params) {
+        search(endpoint, params, singleSearchParam) {
             Wait('start');
-            this.url = `${endpoint}${this.encodeQueryset(params)}`;
+            this.url = `${endpoint}${this.encodeQueryset(params, singleSearchParam)}`;
             Rest.setUrl(this.url);
 
             return Rest.get()
@@ -370,7 +370,8 @@ function QuerysetService ($q, Rest, ProcessErrors, $rootScope, Wait, DjangoSearc
         },
         getSearchInputQueryset (searchInput, isFilterableBaseField = null, isRelatedField = null, isAnsibleFactField = null, singleSearchParam = null) {
             // XXX Should find a better approach than passing in the two 'is...Field' callbacks XXX
-            const space = '%20and%20';
+            const encodedAnd = '%20and%20';
+            const encodedOr = '%20or%20';
             let params = {};
 
             // Remove leading/trailing whitespace if there is any
@@ -398,7 +399,13 @@ function QuerysetService ($q, Rest, ProcessErrors, $rootScope, Wait, DjangoSearc
                 }
 
                 if (singleSearchParam) {
-                    return `${a}${space}${b}`;
+                    if (b === 'or') {
+                        return `${a}${encodedOr}`;
+                    } else if (a.match(/%20or%20$/g)) {
+                        return `${a}${b}`;
+                    } else {
+                        return `${a}${encodedAnd}${b}`;
+                    }
                 }
 
                 return [a, b];
@@ -409,7 +416,11 @@ function QuerysetService ($q, Rest, ProcessErrors, $rootScope, Wait, DjangoSearc
                 let termParams;
 
                 if (termParts.length === 1) {
-                    termParams = searchWithoutKey(term, singleSearchParam);
+                    if (singleSearchParam && termParts[0].toLowerCase() === "or") {
+                        termParams = { [singleSearchParam]: "or" };
+                    } else {
+                        termParams = searchWithoutKey(term, singleSearchParam);
+                    }
                 } else if ((isAnsibleFactField && isAnsibleFactField(termParts)) || (isFilterableBaseField && isFilterableBaseField(termParts))) {
                     termParams = this.encodeParam({ term, singleSearchParam, searchTerm: true });
                 } else if (isRelatedField && isRelatedField(termParts)) {

@@ -62,10 +62,11 @@ function requestWithCache (config) {
  * @yields {boolean} - Indicating a match has been found. If so, the results
  * are set on the model.
  */
-function search (params = {}, config = {}) {
+function search (params = {}, config = {}, headers = {}) {
     const req = {
         method: 'GET',
-        url: this.path
+        url: this.path,
+        headers
     };
 
     if (typeof params === 'string') {
@@ -152,17 +153,22 @@ function httpPost (config = {}) {
     const req = {
         method: 'POST',
         url: this.path,
-        data: config.data
+        data: config.data,
     };
 
     if (config.url) {
         req.url = `${this.path}${config.url}`;
     }
 
+    if (!('replace' in config)) {
+        config.replace = true;
+    }
+
     return $http(req)
         .then(res => {
-            this.model.GET = res.data;
-
+            if (config.replace) {
+                this.model.GET = res.data;
+            }
             return res;
         });
 }

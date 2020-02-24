@@ -8,11 +8,19 @@ const templatesListTemplate = require('~features/templates/templatesList.view.ht
 export default {
     url: "/:organization_id/job_templates",
     name: 'organizations.job_templates',
+    data: {
+        activityStream: true,
+        activityStreamTarget: 'template'
+    },
     params: {
         template_search: {
             dynamic: true,
             value: {
-                type: 'workflow_job_template,job_template',
+                type: 'job_template',
+                order_by: 'name',
+                page_size: '20',
+                or__jobtemplate__project__organization: null,
+                or__jobtemplate__inventory__organization: null
             },
         }
     },
@@ -51,11 +59,11 @@ export default {
             ($stateParams, Wait, GetBasePath, qs) => {
                 const searchPath = GetBasePath('unified_job_templates');
 
-                const searchParam = _.assign($stateParams.template_search, {
-                    or__project__organization: $stateParams.organization_id,
-                    or__jobtemplate__inventory__organization: $stateParams.organization_id,
-                });
-
+                const searchParam = Object.assign(
+                    $stateParams.template_search, {
+                    or__jobtemplate__project__organization: $stateParams.organization_id,
+                    or__jobtemplate__inventory__organization: $stateParams.organization_id}
+                );
                 Wait('start');
                 return qs.search(searchPath, searchParam)
                     .finally(() => Wait('stop'));

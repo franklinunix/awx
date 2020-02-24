@@ -1,18 +1,17 @@
-import tempfile
+# -*- coding: utf-8 -*-
 import json
-import yaml
 import pytest
 from itertools import count
 
 from awx.main.utils.encryption import encrypt_value
-from awx.main.tasks import RunJob
 from awx.main.models import (
     Job,
     JobTemplate,
     JobLaunchConfig,
-    WorkflowJobTemplate
+    WorkflowJobTemplate,
+    Project,
+    Inventory
 )
-from awx.main.utils.safe_yaml import SafeLoader
 
 ENCRYPTED_SECRET = encrypt_value('secret')
 
@@ -82,7 +81,9 @@ def job(mocker):
         'pk': 1, 'job_template.pk': 1, 'job_template.name': '',
         'created_by.pk': 1, 'created_by.username': 'admin',
         'launch_type': 'manual',
+        'verbosity': 1,
         'awx_meta_vars.return_value': {},
+        'ansible_virtualenv_path': '',
         'inventory.get_script_data.return_value': {}})
     ret.project = mocker.MagicMock(scm_revision='asdf1234')
     return ret
@@ -125,29 +126,6 @@ def test_survey_passwords_not_in_extra_vars():
     assert json.loads(job.display_extra_vars()) == {
         'submitter_email': 'foobar@redhat.com',
     }
-
-
-def test_job_safe_args_redacted_passwords(job):
-    """Verify that safe_args hides passwords in the job extra_vars"""
-    kwargs = {'ansible_version': '2.1', 'private_data_dir': tempfile.mkdtemp()}
-    run_job = RunJob()
-    safe_args = run_job.build_safe_args(job, **kwargs)
-    ev_index = safe_args.index('-e') + 1
-    extra_var_file = open(safe_args[ev_index][1:], 'r')
-    extra_vars = yaml.load(extra_var_file, SafeLoader)
-    extra_var_file.close()
-    assert extra_vars['secret_key'] == '$encrypted$'
-
-
-def test_job_args_unredacted_passwords(job, tmpdir_factory):
-    kwargs = {'ansible_version': '2.1', 'private_data_dir': tempfile.mkdtemp()}
-    run_job = RunJob()
-    args = run_job.build_args(job, **kwargs)
-    ev_index = args.index('-e') + 1
-    extra_var_file = open(args[ev_index][1:], 'r')
-    extra_vars = yaml.load(extra_var_file, SafeLoader)
-    extra_var_file.close()
-    assert extra_vars['secret_key'] == 'my_password'
 
 
 def test_launch_config_has_unprompted_vars(survey_spec_factory):
@@ -305,3 +283,49 @@ class TestWorkflowSurveys:
         )
         assert wfjt.variables_needed_to_start == ['question2']
         assert not wfjt.can_start_without_user_input()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize('provided_vars,valid', [
+    ({'tmpl_var': 'bar'}, True),  # same as template, not counted as prompts
+    ({'tmpl_var': 'bar2'}, False),  # different value from template, not okay
+    ({'tmpl_var': 'bar', 'a': 2}, False),  # extra key, not okay
+    ({'tmpl_var': 'bar', False: 2}, False),  # Falsy key
+    ({'tmpl_var': 'bar', u'🐉': u'🐉'}, False),  # dragons
+])
+class TestExtraVarsNoPrompt:
+    def process_vars_and_assert(self, tmpl, provided_vars, valid):
+        prompted_fields, ignored_fields, errors = tmpl._accept_or_ignore_job_kwargs(
+            extra_vars=provided_vars
+        )
+        if valid:
+            assert not ignored_fields
+            assert not errors
+        else:
+            assert ignored_fields
+            assert errors
+
+    def test_jt_extra_vars_counting(self, provided_vars, valid):
+        jt = JobTemplate(
+            name='foo',
+            extra_vars={'tmpl_var': 'bar'},
+            project=Project(),
+            project_id=42,
+            playbook='helloworld.yml',
+            inventory=Inventory(),
+            inventory_id=42
+        )
+        prompted_fields, ignored_fields, errors = jt._accept_or_ignore_job_kwargs(
+            extra_vars=provided_vars
+        )
+        self.process_vars_and_assert(jt, provided_vars, valid)
+
+    def test_wfjt_extra_vars_counting(self, provided_vars, valid):
+        wfjt = WorkflowJobTemplate(
+            name='foo',
+            extra_vars={'tmpl_var': 'bar'}
+        )
+        prompted_fields, ignored_fields, errors = wfjt._accept_or_ignore_job_kwargs(
+            extra_vars=provided_vars
+        )
+        self.process_vars_and_assert(wfjt, provided_vars, valid)

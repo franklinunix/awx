@@ -30,14 +30,20 @@
                 </button>
             </div>
         </div>
-
+        <at-list-toolbar
+            ng-if="vm.applicationsCount > 0"
+            sort-only="true"
+            sort-value="vm.toolbarSortValue"
+            sort-options="vm.toolbarSortOptions"
+            on-sort="vm.onToolbarSort">
+        </at-list-toolbar>
         <at-list results="applications">
             <at-row ng-repeat="application in applications"
                 ng-class="{'at-Row--active': (application.id === vm.activeId)}">
                 <div class="at-Row-items">
                     <at-row-item
                         header-value="{{ application.name }}"
-                        header-link="/#/applications/{{ application.id }}">
+                        header-state="applications.edit({application_id:{{application.id}}})">
                     </at-row-item>
                     <at-row-item
                         label-value="{{:: vm.strings.get('list.ROW_ITEM_LABEL_ORGANIZATION') }}"
@@ -61,7 +67,6 @@
         base-path="applications"
         iterator="application"
         dataset="application_dataset"
-        collection="applications"
-        query-set="application_queryset">
+        collection="applications">
     </paginate>
 </at-panel>

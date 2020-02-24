@@ -80,7 +80,7 @@ class OAuth2ProviderField(fields.DictField):
     default_error_messages = {
         'invalid_key_names': _('Invalid key names: {invalid_key_names}'),
     }
-    valid_key_names = {'ACCESS_TOKEN_EXPIRE_SECONDS', 'AUTHORIZATION_CODE_EXPIRE_SECONDS'}
+    valid_key_names = {'ACCESS_TOKEN_EXPIRE_SECONDS', 'AUTHORIZATION_CODE_EXPIRE_SECONDS', 'REFRESH_TOKEN_EXPIRE_SECONDS'}
     child = fields.IntegerField(min_value=1)
 
     def to_internal_value(self, data):
@@ -101,6 +101,10 @@ class DeprecatedCredentialField(serializers.IntegerField):
         super(DeprecatedCredentialField, self).__init__(**kwargs)
 
     def to_internal_value(self, pk):
+        try:
+            pk = int(pk)
+        except ValueError:
+            self.fail('invalid')
         try:
             Credential.objects.get(pk=pk)
         except ObjectDoesNotExist:

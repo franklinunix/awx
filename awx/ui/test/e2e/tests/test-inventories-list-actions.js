@@ -24,7 +24,6 @@ module.exports = {
         const inventories = client.page.inventories();
 
         client.useCss();
-        client.resizeWindow(1200, 800);
         client.login();
         client.waitForAngular();
 
@@ -42,7 +41,7 @@ module.exports = {
         inventories.waitForElementVisible('div.spinny');
         inventories.waitForElementNotVisible('div.spinny');
 
-        inventories.expect.element(`#inventories_table tr[id="${data.inventoryNoSource.id}"]`).visible;
+        inventories.expect.element(`#inventories_table .List-tableRow[id="${data.inventoryNoSource.id}"]`).visible;
         inventories.expect.element('i[class*="copy"]').visible;
         inventories.expect.element('i[class*="copy"]').enabled;
 
@@ -51,7 +50,7 @@ module.exports = {
         inventories.waitForElementNotVisible('div.spinny');
 
         const activityStream = 'bread-crumb > div i[class$="icon-activity-stream"]';
-        const activityRow = '#activities_table tr td[class*="description-column"] a';
+        const activityRow = '#activities_table .List-tableCell[class*="description-column"] a';
         const toast = 'div[class="Toast-icon"]';
 
         inventories.waitForElementNotPresent(toast);
@@ -81,7 +80,6 @@ module.exports = {
         const inventories = client.page.inventories();
 
         client.useCss();
-        client.resizeWindow(1200, 800);
         client.login();
         client.waitForAngular();
 
@@ -99,7 +97,7 @@ module.exports = {
         inventories.waitForElementVisible('div.spinny');
         inventories.waitForElementNotVisible('div.spinny');
 
-        inventories.expect.element(`#inventories_table tr[id="${data.inventory.id}"]`).visible;
+        inventories.expect.element(`#inventories_table .List-tableRow[id="${data.inventory.id}"]`).visible;
         inventories.expect.element('#copy-action').visible;
         inventories.expect.element('#copy-action[class*="btn-disabled"]').present;
 

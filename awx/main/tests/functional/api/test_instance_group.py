@@ -1,3 +1,5 @@
+import random
+
 import pytest
 
 from awx.api.versioning import reverse
@@ -6,6 +8,7 @@ from awx.main.models import (
     InstanceGroup,
     ProjectUpdate,
 )
+from awx.main.utils import camelcase_to_underscore
 
 
 @pytest.fixture
@@ -43,6 +46,14 @@ def isolated_instance_group(instance_group, instance):
 
 
 @pytest.fixture
+def containerized_instance_group(instance_group, kube_credential):
+    ig = InstanceGroup(name="container")
+    ig.credential = kube_credential
+    ig.save()
+    return ig
+
+
+@pytest.fixture
 def create_job_factory(job_factory, instance_group):
     def fn(status='running'):
         j = job_factory()
@@ -66,16 +77,41 @@ def create_project_update_factory(instance_group, project):
 
 @pytest.fixture
 def instance_group_jobs_running(instance_group, create_job_factory, create_project_update_factory):
-    jobs_running = [create_job_factory(status='running') for i in xrange(0, 2)]
-    project_updates_running = [create_project_update_factory(status='running') for i in xrange(0, 2)]
+    jobs_running = [create_job_factory(status='running') for i in range(0, 2)]
+    project_updates_running = [create_project_update_factory(status='running') for i in range(0, 2)]
     return jobs_running + project_updates_running
 
 
 @pytest.fixture
 def instance_group_jobs_successful(instance_group, create_job_factory, create_project_update_factory):
-    jobs_successful = [create_job_factory(status='successful') for i in xrange(0, 2)]
-    project_updates_successful = [create_project_update_factory(status='successful') for i in xrange(0, 2)]
+    jobs_successful = [create_job_factory(status='successful') for i in range(0, 2)]
+    project_updates_successful = [create_project_update_factory(status='successful') for i in range(0, 2)]
     return jobs_successful + project_updates_successful
+
+
+@pytest.fixture(scope='function')
+def source_model(request):
+    return request.getfixturevalue(request.param)
+
+
+@pytest.mark.django_db
+def test_instance_group_is_controller(instance_group, isolated_instance_group, non_iso_instance):
+    assert not isolated_instance_group.is_controller
+    assert instance_group.is_controller
+
+    instance_group.instances.set([non_iso_instance])
+
+    assert instance_group.is_controller
+
+
+@pytest.mark.django_db
+def test_instance_group_is_isolated(instance_group, isolated_instance_group):
+    assert not instance_group.is_isolated
+    assert isolated_instance_group.is_isolated
+
+    isolated_instance_group.instances.set([])
+
+    assert isolated_instance_group.is_isolated
 
 
 @pytest.mark.django_db
@@ -176,3 +212,83 @@ def test_prevent_non_isolated_instance_added_to_isolated_instance_group_via_poli
     resp = patch(url, {'policy_instance_list': [non_iso_instance.hostname]}, user=admin, expect=400)
     assert [u"Isolated instance group membership may not be managed via the API."] == resp.data['policy_instance_list']
     assert isolated_instance_group.policy_instance_list == []
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    'source_model', ['job_template', 'inventory', 'organization'], indirect=True
+)
+def test_instance_group_order_persistence(get, post, admin, source_model):
+    # create several instance groups in random order
+    total = 5
+    pks = list(range(total))
+    random.shuffle(pks)
+    instances = [InstanceGroup.objects.create(name='iso-%d' % i) for i in pks]
+    view_name = camelcase_to_underscore(source_model.__class__.__name__)
+    url = reverse(
+        'api:{}_instance_groups_list'.format(view_name),
+        kwargs={'pk': source_model.pk}
+    )
+
+    # associate them all
+    for instance in instances:
+        post(url, {'associate': True, 'id': instance.id}, admin, expect=204)
+
+    for _ in range(10):
+        # remove them all
+        for instance in instances:
+            post(url, {'disassociate': True, 'id': instance.id}, admin, expect=204)
+        resp = get(url, admin)
+        assert resp.data['count'] == 0
+
+        # add them all in random order
+        before = sorted(instances, key=lambda x: random.random())
+        for instance in before:
+            post(url, {'associate': True, 'id': instance.id}, admin, expect=204)
+        resp = get(url, admin)
+        assert resp.data['count'] == total
+        assert [ig['name'] for ig in resp.data['results']] == [ig.name for ig in before]
+
+
+@pytest.mark.django_db
+def test_instance_group_update_fields(patch, instance, instance_group, admin, containerized_instance_group):
+    # policy_instance_ variables can only be updated in instance groups that are NOT containerized
+    # instance group (not containerized)
+    ig_url = reverse("api:instance_group_detail", kwargs={'pk': instance_group.pk})
+    assert not instance_group.is_containerized
+    assert not containerized_instance_group.is_isolated
+    resp = patch(ig_url, {'policy_instance_percentage':15}, admin, expect=200)
+    assert 15 == resp.data['policy_instance_percentage']
+    resp = patch(ig_url, {'policy_instance_minimum':15}, admin, expect=200)
+    assert 15 == resp.data['policy_instance_minimum']
+    resp = patch(ig_url, {'policy_instance_list':[instance.hostname]}, admin)
+    assert [instance.hostname] == resp.data['policy_instance_list']
+
+    # containerized instance group
+    cg_url = reverse("api:instance_group_detail", kwargs={'pk': containerized_instance_group.pk})
+    assert containerized_instance_group.is_containerized
+    assert not containerized_instance_group.is_isolated
+    resp = patch(cg_url, {'policy_instance_percentage':15}, admin, expect=400)
+    assert ["Containerized instances may not be managed via the API"] == resp.data['policy_instance_percentage']
+    resp = patch(cg_url, {'policy_instance_minimum':15}, admin, expect=400)
+    assert ["Containerized instances may not be managed via the API"] == resp.data['policy_instance_minimum']
+    resp = patch(cg_url, {'policy_instance_list':[instance.hostname]}, admin)
+    assert ["Containerized instances may not be managed via the API"] == resp.data['policy_instance_list']
+
+
+@pytest.mark.django_db
+def test_containerized_group_default_fields(instance_group, kube_credential):
+    ig = InstanceGroup(name="test_policy_field_defaults")
+    ig.policy_instance_list = [1]
+    ig.policy_instance_minimum = 5
+    ig.policy_instance_percentage = 5
+    ig.save()
+    assert ig.policy_instance_list == [1]
+    assert ig.policy_instance_minimum == 5
+    assert ig.policy_instance_percentage == 5
+    ig.credential = kube_credential
+    ig.save()
+    assert ig.policy_instance_list == []
+    assert ig.policy_instance_minimum == 0
+    assert ig.policy_instance_percentage == 0
+    

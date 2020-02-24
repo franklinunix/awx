@@ -6,7 +6,6 @@ import {
     OUTPUT_PAGE_SIZE,
 } from './constants';
 
-let $compile;
 let $q;
 let $scope;
 let $state;
@@ -97,6 +96,7 @@ function firstRange () {
                 .then(() => render.pushFront(results));
         })
         .finally(() => {
+            render.compile();
             scroll.resume();
             lockFollow = false;
         });
@@ -124,6 +124,7 @@ function nextRange () {
                 .then(() => render.pushFront(results));
         })
         .finally(() => {
+            render.compile();
             scroll.resume();
             lockFrames = false;
 
@@ -162,6 +163,7 @@ function previousRange () {
             return $q.resolve();
         })
         .finally(() => {
+            render.compile();
             scroll.resume();
             lockFrames = false;
 
@@ -189,6 +191,7 @@ function lastRange () {
             return $q.resolve();
         })
         .finally(() => {
+            render.compile();
             scroll.resume();
 
             return $q.resolve();
@@ -227,8 +230,7 @@ function canStartFollowing () {
     }
 
     if (followOnce && // one-time activation from top of first page
-        scroll.isBeyondUpperThreshold() &&
-        slide.getTailCounter() - slide.getHeadCounter() >= OUTPUT_PAGE_SIZE) {
+        scroll.isBeyondUpperThreshold()) {
         followOnce = false;
 
         return true;
@@ -280,6 +282,7 @@ function firstPage () {
                 .then(() => render.pushFront(results));
         })
         .finally(() => {
+            render.compile();
             scroll.resume();
 
             return $q.resolve();
@@ -309,6 +312,7 @@ function lastPage () {
             return $q.resolve();
         })
         .finally(() => {
+            render.compile();
             scroll.resume();
 
             return $q.resolve();
@@ -330,6 +334,7 @@ function nextPage () {
                 .then(() => render.pushFront(results));
         })
         .finally(() => {
+            render.compile();
             scroll.resume();
         });
 }
@@ -363,6 +368,7 @@ function previousPage () {
             return $q.resolve();
         })
         .finally(() => {
+            render.compile();
             scroll.resume();
 
             return $q.resolve();
@@ -386,7 +392,8 @@ function last () {
         return lastPage();
     }
 
-    return lastRange();
+    return lastRange()
+        .then(() => previousRange());
 }
 
 function next () {
@@ -415,10 +422,18 @@ function menuLast () {
 
 function down () {
     scroll.moveDown();
+
+    if (scroll.isBeyondLowerThreshold()) {
+        next();
+    }
 }
 
 function up () {
     scroll.moveUp();
+
+    if (scroll.isBeyondUpperThreshold()) {
+        previous();
+    }
 }
 
 function togglePanelExpand () {
@@ -432,7 +447,7 @@ function togglePanelExpand () {
 const iconCollapsed = 'fa-angle-right';
 const iconExpanded = 'fa-angle-down';
 const iconSelector = '.at-Stdout-toggle > i';
-const lineCollapsed = 'hidden';
+const lineCollapsed = 'at-Stdout-row--hidden';
 
 function toggleCollapseAll () {
     if (scroll.isPaused()) return;
@@ -517,11 +532,15 @@ function togglePlayCollapse (uuid) {
         taskIcons.addClass(iconCollapsed);
 
         lines.addClass(lineCollapsed);
+
+        descendants
+            .map(item => $(`.child-of-${item}`))
+            .forEach(line => line.addClass(lineCollapsed));
     }
 
     descendants
         .map(item => render.records[item])
-        .filter(({ name }) => name === EVENT_START_TASK)
+        .filter((descRecord) => descRecord && descRecord.name === EVENT_START_TASK)
         .forEach(rec => { render.records[rec.uuid].isCollapsed = true; });
 
     render.records[uuid].isCollapsed = !isCollapsed;
@@ -544,10 +563,6 @@ function toggleTaskCollapse (uuid) {
     }
 
     render.records[uuid].isCollapsed = !isCollapsed;
-}
-
-function compile (html) {
-    return $compile(html)($scope);
 }
 
 function showHostDetails (id, uuid) {
@@ -599,7 +614,7 @@ function showMissingEvents (uuid) {
                         delete render.records[uuid];
                     }
                 })
-                .then(() => render.compile(elements))
+                .then(() => render.compile())
                 .then(() => lines);
         });
 }
@@ -709,7 +724,6 @@ function clear () {
 }
 
 function OutputIndexController (
-    _$compile_,
     _$q_,
     _$scope_,
     _$state_,
@@ -727,7 +741,6 @@ function OutputIndexController (
     const { isPanelExpanded, _debug } = $stateParams;
     const isProcessingFinished = !_debug && _resource_.model.get('event_processing_finished');
 
-    $compile = _$compile_;
     $q = _$q_;
     $scope = _$scope_;
     $state = _$state_;
@@ -765,7 +778,7 @@ function OutputIndexController (
     vm.debug = _debug;
 
     render.requestAnimationFrame(() => {
-        render.init({ compile, toggles: vm.toggleLineEnabled });
+        render.init($scope, { toggles: vm.toggleLineEnabled });
 
         status.init(resource);
         page.init(resource.events);
@@ -809,12 +822,12 @@ function OutputIndexController (
             onStop () {
                 lockFollow = true;
                 stopFollowing();
-                stopListening();
                 status.updateStats();
                 status.dispatch();
                 status.sync();
                 scroll.unlock();
                 scroll.unhide();
+                render.compile();
             }
         });
 
@@ -850,7 +863,6 @@ function OutputIndexController (
 }
 
 OutputIndexController.$inject = [
-    '$compile',
     '$q',
     '$scope',
     '$state',

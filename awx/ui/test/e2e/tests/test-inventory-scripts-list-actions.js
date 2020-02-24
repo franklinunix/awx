@@ -12,7 +12,6 @@ module.exports = {
         const inventoryScripts = client.page.inventoryScripts();
 
         client.useCss();
-        client.resizeWindow(1200, 800);
         client.login();
         client.waitForAngular();
 
@@ -30,7 +29,7 @@ module.exports = {
         inventoryScripts.waitForElementVisible('div.spinny');
         inventoryScripts.waitForElementNotVisible('div.spinny');
 
-        inventoryScripts.expect.element(`#inventory_scripts_table tr[id="${data.inventoryScript.id}"]`).visible;
+        inventoryScripts.expect.element(`#inventory_scripts_table .List-tableRow[id="${data.inventoryScript.id}"]`).visible;
         inventoryScripts.expect.element('i[class*="copy"]').visible;
         inventoryScripts.expect.element('i[class*="copy"]').enabled;
 
@@ -39,7 +38,7 @@ module.exports = {
         inventoryScripts.waitForElementNotVisible('div.spinny');
 
         const activityStream = 'bread-crumb > div i[class$="icon-activity-stream"]';
-        const activityRow = '#activities_table tr td[class*="description-column"] a';
+        const activityRow = '#activities_table .List-tableCell[class*="description-column"] a';
         const toast = 'div[class="Toast-icon"]';
 
         inventoryScripts.waitForElementNotPresent(toast);

@@ -18,7 +18,7 @@ from django.utils.translation import ugettext_lazy as _
 
 # AWX
 from awx.api.versioning import reverse
-from awx.main.models.base import * # noqa
+from awx.main.models.base import PrimordialModel
 from awx.main.models.jobs import LaunchTimeConfig
 from awx.main.utils import ignore_inventory_computed_fields
 from awx.main.consumers import emit_channel_notification
@@ -61,11 +61,12 @@ class ScheduleManager(ScheduleFilterMethods, models.Manager):
         return ScheduleQuerySet(self.model, using=self._db)
 
 
-class Schedule(CommonModel, LaunchTimeConfig):
+class Schedule(PrimordialModel, LaunchTimeConfig):
 
     class Meta:
         app_label = 'main'
         ordering = ['-next_run']
+        unique_together = ('unified_job_template', 'name')
 
     objects = ScheduleManager()
 
@@ -73,6 +74,9 @@ class Schedule(CommonModel, LaunchTimeConfig):
         'UnifiedJobTemplate',
         related_name='schedules',
         on_delete=models.CASCADE,
+    )
+    name = models.CharField(
+        max_length=512,
     )
     enabled = models.BooleanField(
         default=True,
@@ -115,10 +119,11 @@ class Schedule(CommonModel, LaunchTimeConfig):
                 tzinfo = r._dtstart.tzinfo
                 if tzinfo is utc:
                     return 'UTC'
-                fname = tzinfo._filename
-                for zone in all_zones:
-                    if fname.endswith(zone):
-                        return zone
+                fname = getattr(tzinfo, '_filename', None)
+                if fname:
+                    for zone in all_zones:
+                        if fname.endswith(zone):
+                            return zone
         logger.warn('Could not detect valid zoneinfo for {}'.format(self.rrule))
         return ''
 
@@ -153,7 +158,7 @@ class Schedule(CommonModel, LaunchTimeConfig):
         if 'until=' in rrule.lower():
             # if DTSTART;TZID= is used, coerce "naive" UNTIL values
             # to the proper UTC date
-            match_until = re.match(".*?(?P<until>UNTIL\=[0-9]+T[0-9]+)(?P<utcflag>Z?)", rrule)
+            match_until = re.match(r".*?(?P<until>UNTIL\=[0-9]+T[0-9]+)(?P<utcflag>Z?)", rrule)
             if not len(match_until.group('utcflag')):
                 # rrule = DTSTART;TZID=America/New_York:20200601T120000 RRULE:...;UNTIL=20200601T170000
 
@@ -209,7 +214,7 @@ class Schedule(CommonModel, LaunchTimeConfig):
                 pass
         return x
 
-    def __unicode__(self):
+    def __str__(self):
         return u'%s_t%s_%s_%s' % (self.name, self.unified_job_template.id, self.id, self.next_run)
 
     def get_absolute_url(self, request=None):
@@ -223,15 +228,23 @@ class Schedule(CommonModel, LaunchTimeConfig):
         job_kwargs['_eager_fields'] = {'launch_type': 'scheduled', 'schedule': self}
         return job_kwargs
 
-    def update_computed_fields(self):
-        future_rs = Schedule.rrulestr(self.rrule)
-        next_run_actual = future_rs.after(now())
+    def update_computed_fields_no_save(self):
+        affects_fields = ['next_run', 'dtstart', 'dtend']
+        starting_values = {}
+        for field_name in affects_fields:
+            starting_values[field_name] = getattr(self, field_name)
 
-        if next_run_actual is not None:
-            if not datetime_exists(next_run_actual):
-                # skip imaginary dates, like 2:30 on DST boundaries
-                next_run_actual = future_rs.after(next_run_actual)
-            next_run_actual = next_run_actual.astimezone(pytz.utc)
+        future_rs = Schedule.rrulestr(self.rrule)
+
+        if self.enabled:
+            next_run_actual = future_rs.after(now())
+            if next_run_actual is not None:
+                if not datetime_exists(next_run_actual):
+                    # skip imaginary dates, like 2:30 on DST boundaries
+                    next_run_actual = future_rs.after(next_run_actual)
+                next_run_actual = next_run_actual.astimezone(pytz.utc)
+        else:
+            next_run_actual = None
 
         self.next_run = next_run_actual
         try:
@@ -244,11 +257,38 @@ class Schedule(CommonModel, LaunchTimeConfig):
                 self.dtend = future_rs[-1].astimezone(pytz.utc)
             except IndexError:
                 self.dtend = None
+
+        changed = any(getattr(self, field_name) != starting_values[field_name] for field_name in affects_fields)
+        return changed
+
+    def update_computed_fields(self):
+        changed = self.update_computed_fields_no_save()
+        if not changed:
+            return
         emit_channel_notification('schedules-changed', dict(id=self.id, group_name='schedules'))
+        # Must save self here before calling unified_job_template computed fields
+        # in order for that method to be correct
+        # by adding modified to update fields, we avoid updating modified time
+        super(Schedule, self).save(update_fields=['next_run', 'dtstart', 'dtend', 'modified'])
         with ignore_inventory_computed_fields():
             self.unified_job_template.update_computed_fields()
 
     def save(self, *args, **kwargs):
-        self.update_computed_fields()
         self.rrule = Schedule.coerce_naive_until(self.rrule)
+        changed = self.update_computed_fields_no_save()
+        if changed and 'update_fields' in kwargs:
+            for field_name in ['next_run', 'dtstart', 'dtend']:
+                if field_name not in kwargs['update_fields']:
+                    kwargs['update_fields'].append(field_name)
         super(Schedule, self).save(*args, **kwargs)
+        if changed:
+            with ignore_inventory_computed_fields():
+                self.unified_job_template.update_computed_fields()
+
+    def delete(self, *args, **kwargs):
+        ujt = self.unified_job_template
+        r = super(Schedule, self).delete(*args, **kwargs)
+        if ujt:
+            with ignore_inventory_computed_fields():
+                ujt.update_computed_fields()
+        return r

@@ -1,21 +1,19 @@
 # Python
-from collections import namedtuple
 import contextlib
 import logging
+import re
 import sys
 import threading
 import time
-import StringIO
-import traceback
-
-import six
+import urllib.parse
 
 # Django
 from django.conf import LazySettings
 from django.conf import settings, UserSettingsHolder
 from django.core.cache import cache as django_cache
 from django.core.exceptions import ImproperlyConfigured
-from django.db import ProgrammingError, OperationalError, transaction, connection
+from django.db import transaction, connection
+from django.db.utils import Error as DBError
 from django.utils.functional import cached_property
 
 # Django REST Framework
@@ -23,7 +21,6 @@ from rest_framework.fields import empty, SkipField
 
 # Tower
 from awx.main.utils import encrypt_field, decrypt_field
-from awx.main.utils.db import get_tower_migration_version
 from awx.conf import settings_registry
 from awx.conf.models import Setting
 from awx.conf.migrations._reencrypt import decrypt_field as old_decrypt_field
@@ -60,6 +57,15 @@ SETTING_CACHE_DEFAULTS = True
 __all__ = ['SettingsWrapper', 'get_settings_to_cache', 'SETTING_CACHE_NOTSET']
 
 
+def normalize_broker_url(value):
+    parts = value.rsplit('@', 1)
+    match = re.search('(amqp://[^:]+:)(.*)', parts[0])
+    if match:
+        prefix, password = match.group(1), match.group(2)
+        parts[0] = prefix + urllib.parse.quote(password)
+    return '@'.join(parts)
+
+
 @contextlib.contextmanager
 def _ctit_db_wrapper(trans_safe=False):
     '''
@@ -79,45 +85,12 @@ def _ctit_db_wrapper(trans_safe=False):
                     logger.debug('Obtaining database settings in spite of broken transaction.')
                     transaction.set_rollback(False)
         yield
-    except (ProgrammingError, OperationalError):
-        if 'migrate' in sys.argv and get_tower_migration_version() < '310':
-            logger.info('Using default settings until version 3.1 migration.')
+    except DBError:
+        if trans_safe:
+            if 'migrate' not in sys.argv and 'check_migrations' not in sys.argv:
+                logger.exception('Database settings are not available, using defaults.')
         else:
-            # We want the _full_ traceback with the context
-            # First we get the current call stack, which constitutes the "top",
-            # it has the context up to the point where the context manager is used
-            top_stack = StringIO.StringIO()
-            traceback.print_stack(file=top_stack)
-            top_lines = top_stack.getvalue().strip('\n').split('\n')
-            top_stack.close()
-            # Get "bottom" stack from the local error that happened
-            # inside of the "with" block this wraps
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            bottom_stack = StringIO.StringIO()
-            traceback.print_tb(exc_traceback, file=bottom_stack)
-            bottom_lines = bottom_stack.getvalue().strip('\n').split('\n')
-            # Glue together top and bottom where overlap is found
-            bottom_cutoff = 0
-            for i, line in enumerate(bottom_lines):
-                if line in top_lines:
-                    # start of overlapping section, take overlap from bottom
-                    top_lines = top_lines[:top_lines.index(line)]
-                    bottom_cutoff = i
-                    break
-            bottom_lines = bottom_lines[bottom_cutoff:]
-            tb_lines = top_lines + bottom_lines
-
-            tb_string = '\n'.join(
-                ['Traceback (most recent call last):'] +
-                tb_lines +
-                ['{}: {}'.format(exc_type.__name__, str(exc_value))]
-            )
-            bottom_stack.close()
-            # Log the combined stack
-            if trans_safe:
-                logger.warning('Database settings are not available, using defaults, error:\n{}'.format(tb_string))
-            else:
-                logger.error('Error modifying something related to database settings.\n{}'.format(tb_string))
+            logger.exception('Error modifying something related to database settings.')
     finally:
         if trans_safe and is_atomic and rollback_set:
             transaction.set_rollback(rollback_set)
@@ -127,6 +100,15 @@ def filter_sensitive(registry, key, value):
     if registry.is_setting_encrypted(key):
         return '$encrypted$'
     return value
+
+
+class TransientSetting(object):
+
+    __slots__ = ('pk', 'value')
+
+    def __init__(self, pk, value):
+        self.pk = pk
+        self.value = value
 
 
 class EncryptedCacheProxy(object):
@@ -156,16 +138,6 @@ class EncryptedCacheProxy(object):
     def get(self, key, **kwargs):
         value = self.cache.get(key, **kwargs)
         value = self._handle_encryption(self.decrypter, key, value)
-
-        # python-memcached auto-encodes unicode on cache set in python2
-        # https://github.com/linsomniac/python-memcached/issues/79
-        # https://github.com/linsomniac/python-memcached/blob/288c159720eebcdf667727a859ef341f1e908308/memcache.py#L961
-        if six.PY2 and isinstance(value, six.binary_type):
-            try:
-                six.text_type(value)
-            except UnicodeDecodeError:
-                value = value.decode('utf-8')
-        logger.debug('cache get(%r, %r) -> %r', key, empty, filter_sensitive(self.registry, key, value))
         return value
 
     def set(self, key, value, log=True, **kwargs):
@@ -188,8 +160,6 @@ class EncryptedCacheProxy(object):
             self.set(key, value, log=False, **kwargs)
 
     def _handle_encryption(self, method, key, value):
-        TransientSetting = namedtuple('TransientSetting', ['pk', 'value'])
-
         if value is not empty and self.registry.is_setting_encrypted(key):
             # If the setting exists in the database, we'll use its primary key
             # as part of the AES key when encrypting/decrypting
@@ -297,7 +267,7 @@ class SettingsWrapper(UserSettingsHolder):
             self.__dict__['_awx_conf_preload_expires'] = time.time() + SETTING_CACHE_TIMEOUT
             # Check for any settings that have been defined in Python files and
             # make those read-only to avoid overriding in the database.
-            if not self._awx_conf_init_readonly and 'migrate_to_database_settings' not in sys.argv:
+            if not self._awx_conf_init_readonly:
                 defaults_snapshot = self._get_default('DEFAULTS_SNAPSHOT')
                 for key in get_writeable_settings(self.registry):
                     init_default = defaults_snapshot.get(key, None)
@@ -379,8 +349,9 @@ class SettingsWrapper(UserSettingsHolder):
             setting = None
             setting_id = None
             if not field.read_only or name in (
-                # these two values are read-only - however - we *do* want
+                # these values are read-only - however - we *do* want
                 # to fetch their value from the database
+                'INSTALL_UUID',
                 'AWX_ISOLATED_PRIVATE_KEY',
                 'AWX_ISOLATED_PUBLIC_KEY',
             ):
@@ -444,7 +415,16 @@ class SettingsWrapper(UserSettingsHolder):
                 value = self._get_local(name)
         if value is not empty:
             return value
-        return self._get_default(name)
+        value = self._get_default(name)
+        # sometimes users specify RabbitMQ passwords that contain
+        # unescaped : and @ characters that confused urlparse, e.g.,
+        # amqp://guest:a@ns:ibl3#@localhost:5672//
+        #
+        # detect these scenarios, and automatically escape the user's
+        # password so it just works
+        if name == 'BROKER_URL':
+            value = normalize_broker_url(value)
+        return value
 
     def _set_local(self, name, value):
         field = self.registry.get_setting_field(name)
